@@ -36,6 +36,17 @@ function setBusy(isBusy) {
   refreshLocation.disabled = isBusy;
 }
 
+function setNextAction(nextAction) {
+  if (!nextAction) {
+    return;
+  }
+
+  actionButtons.forEach((button) => {
+    button.disabled = button.dataset.action !== nextAction;
+  });
+  pendingAction = nextAction;
+}
+
 function requestLocation() {
   if (!navigator.geolocation) {
     locationStatus.textContent = "Location is not supported on this device";
@@ -142,13 +153,18 @@ async function submitTime(action) {
 
     const actionText = action === "CHECK_IN" ? "checked in" : "checked out";
     setMessage(`${response.name} ${actionText} at ${response.time}.`, "good");
+    setNextAction(response.nextAction);
     form.querySelector("#jobName").value = "";
     form.querySelector("#notes").value = "";
     requestLocation();
   } catch (error) {
     setMessage(error.message || "Something went wrong. Try again.", "bad");
   } finally {
-    setBusy(false);
+    if (!message.classList.contains("good")) {
+      setBusy(false);
+    } else {
+      refreshLocation.disabled = false;
+    }
   }
 }
 

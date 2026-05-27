@@ -37,6 +37,15 @@ function handleRequest_(params) {
       return fail_("Name or PIN is incorrect.");
     }
 
+    const currentStatus = getWorkerStatus_(spreadsheet, worker.name);
+    if (action === "CHECK_IN" && currentStatus.lastAction === "Check In") {
+      return fail_(`${worker.name} is already checked in. Please check out first.`);
+    }
+
+    if (action === "CHECK_OUT" && currentStatus.lastAction !== "Check In") {
+      return fail_(`${worker.name} is not checked in. Please check in first.`);
+    }
+
     const now = new Date();
     const displayDate = Utilities.formatDate(now, SETTINGS.TIMEZONE, "EEE MMM d yyyy");
     const displayTime = Utilities.formatDate(now, SETTINGS.TIMEZONE, "HH:mm:ss");
@@ -69,6 +78,7 @@ function handleRequest_(params) {
       action,
       date: displayDate,
       time: displayTime,
+      nextAction: action === "CHECK_IN" ? "CHECK_OUT" : "CHECK_IN",
       message: "Saved.",
     };
   } catch (error) {
@@ -137,6 +147,7 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
   const logDisplayValues = logRange.getDisplayValues();
   const entries = [];
   const days = {};
+  const targetName = normalizeName_(workerName);
 
   for (let row = 1; row < logValues.length; row += 1) {
     const timestamp = logValues[row][0];
@@ -151,7 +162,7 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
     const accuracy = String(logValues[row][9] || "").trim();
     const mapLink = String(logValues[row][10] || "").trim();
 
-    if (name !== workerName) {
+    if (normalizeName_(name) !== targetName) {
       continue;
     }
 
@@ -318,7 +329,7 @@ function uniqueText_(items) {
 function findWorker_(spreadsheet, name, pin) {
   const sheet = spreadsheet.getSheetByName(SETTINGS.WORKERS_SHEET);
   const values = sheet.getDataRange().getValues();
-  const wantedName = name.toLowerCase();
+  const wantedName = normalizeName_(name);
   const wantedPin = String(pin);
 
   for (let row = 1; row < values.length; row += 1) {
@@ -326,12 +337,37 @@ function findWorker_(spreadsheet, name, pin) {
     const workerPin = String(values[row][1] || "").trim();
     const active = String(values[row][2] || "TRUE").trim().toUpperCase();
 
-    if (workerName.toLowerCase() === wantedName && workerPin === wantedPin && active !== "FALSE") {
+    if (normalizeName_(workerName) === wantedName && workerPin === wantedPin && active !== "FALSE") {
       return { name: workerName };
     }
   }
 
   return null;
+}
+
+function getWorkerStatus_(spreadsheet, workerName) {
+  const sheet = spreadsheet.getSheetByName(SETTINGS.LOG_SHEET);
+  const values = sheet.getDataRange().getValues();
+  const targetName = normalizeName_(workerName);
+
+  for (let row = values.length - 1; row >= 1; row -= 1) {
+    const name = String(values[row][4] || "").trim();
+    if (normalizeName_(name) === targetName) {
+      return {
+        lastAction: String(values[row][3] || "").trim(),
+        lastTimestamp: values[row][0],
+      };
+    }
+  }
+
+  return {
+    lastAction: "",
+    lastTimestamp: null,
+  };
+}
+
+function normalizeName_(name) {
+  return String(name || "").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function sanitizeCallback_(callback) {
