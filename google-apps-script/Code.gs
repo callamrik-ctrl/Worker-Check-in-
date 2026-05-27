@@ -38,8 +38,8 @@ function handleRequest_(params) {
     }
 
     const now = new Date();
-    const displayDate = Utilities.formatDate(now, SETTINGS.TIMEZONE, "yyyy-MM-dd");
-    const displayTime = Utilities.formatDate(now, SETTINGS.TIMEZONE, "h:mm a");
+    const displayDate = Utilities.formatDate(now, SETTINGS.TIMEZONE, "EEE MMM d yyyy");
+    const displayTime = Utilities.formatDate(now, SETTINGS.TIMEZONE, "HH:mm:ss");
     const lat = String(params.latitude || "").trim();
     const lng = String(params.longitude || "").trim();
     const mapLink = lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : "";
@@ -60,6 +60,7 @@ function handleRequest_(params) {
       String(params.timezone || "").trim(),
       String(params.userAgent || "").trim(),
     ]);
+    formatLogSheet_(spreadsheet.getSheetByName(SETTINGS.LOG_SHEET));
     rebuildWorkerSheet_(spreadsheet, worker.name);
 
     return {
@@ -110,6 +111,7 @@ function setupSheets_(spreadsheet, populateWorkerSheets) {
     ]);
     logSheet.setFrozenRows(1);
   }
+  formatLogSheet_(logSheet);
 
   if (populateWorkerSheets) {
     const workerValues = workersSheet.getDataRange().getValues();
@@ -130,14 +132,16 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
   }
 
   const manualValues = readManualSummaryValues_(sheet);
-  const logValues = spreadsheet.getSheetByName(SETTINGS.LOG_SHEET).getDataRange().getValues();
+  const logRange = spreadsheet.getSheetByName(SETTINGS.LOG_SHEET).getDataRange();
+  const logValues = logRange.getValues();
+  const logDisplayValues = logRange.getDisplayValues();
   const entries = [];
   const days = {};
 
   for (let row = 1; row < logValues.length; row += 1) {
     const timestamp = logValues[row][0];
-    const date = String(logValues[row][1] || "").trim();
-    const time = String(logValues[row][2] || "").trim();
+    const date = String(logDisplayValues[row][1] || "").trim();
+    const time = String(logDisplayValues[row][2] || "").trim();
     const action = String(logValues[row][3] || "").trim();
     const name = String(logValues[row][4] || "").trim();
     const job = String(logValues[row][5] || "").trim();
@@ -231,7 +235,21 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
   }
 
   sheet.setFrozenRows(2);
+  formatWorkerSheet_(sheet);
   sheet.autoResizeColumns(1, 20);
+}
+
+function formatLogSheet_(sheet) {
+  const lastRow = Math.max(sheet.getLastRow(), 2);
+  sheet.getRange("B:C").setNumberFormat("@");
+  sheet.getRange(2, 1, lastRow - 1, 1).setNumberFormat("M/d/yyyy HH:mm:ss");
+}
+
+function formatWorkerSheet_(sheet) {
+  const lastRow = Math.max(sheet.getLastRow(), 3);
+  sheet.getRange("A:B").setNumberFormat("@");
+  sheet.getRange("K:M").setNumberFormat("@");
+  sheet.getRange(3, 1, lastRow - 2, 1).setNumberFormat("@");
 }
 
 function writeWorkerHeaders_(sheet) {
