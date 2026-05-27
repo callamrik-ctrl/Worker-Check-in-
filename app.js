@@ -15,6 +15,8 @@ let allowedAction = null;
 let busy = false;
 let statusTimer = null;
 
+updateActionButtons();
+
 function updateClock() {
   const now = new Date();
   todayText.textContent = now.toLocaleDateString(undefined, {
@@ -36,7 +38,7 @@ function setMessage(text, type = "") {
 
 function updateActionButtons() {
   actionButtons.forEach((button) => {
-    button.disabled = busy || (allowedAction && button.dataset.action !== allowedAction);
+    button.disabled = busy || !allowedAction || button.dataset.action !== allowedAction;
   });
 }
 
@@ -69,6 +71,7 @@ async function checkWorkerStatus() {
   if (!scriptUrl || !name || !pin) {
     allowedAction = null;
     updateActionButtons();
+    setMessage("Enter name and PIN to load current status.");
     return;
   }
 
@@ -82,6 +85,7 @@ async function checkWorkerStatus() {
     if (!response || response.ok !== true) {
       allowedAction = null;
       updateActionButtons();
+      setMessage(response?.message || "Enter a valid name and PIN.", "bad");
       return;
     }
 
@@ -153,6 +157,20 @@ function jsonpRequest(url, params) {
 }
 
 async function submitTime(action) {
+  if (!allowedAction) {
+    setMessage("Enter name and PIN first so current status can load.", "bad");
+    queueStatusCheck();
+    return;
+  }
+
+  if (action !== allowedAction) {
+    setMessage(
+      allowedAction === "CHECK_IN" ? "This worker needs to check in first." : "This worker needs to check out first.",
+      "bad",
+    );
+    return;
+  }
+
   const scriptUrl = (config.scriptUrl || "").trim();
   if (!scriptUrl) {
     setMessage("Add your Google Apps Script Web App URL in config.js first.", "bad");
