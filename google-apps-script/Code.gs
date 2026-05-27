@@ -1,0 +1,142 @@
+const SETTINGS = {
+  WORKERS_SHEET: "Workers",
+  LOG_SHEET: "Time Log",
+  TIMEZONE: "America/Toronto",
+};
+
+function setup() {
+  setupSheets_(SpreadsheetApp.getActiveSpreadsheet());
+}
+
+function doGet(e) {
+  const callback = sanitizeCallback_(e.parameter.callback || "callback");
+  const response = handleRequest_(e.parameter);
+  return ContentService.createTextOutput(`${callback}(${JSON.stringify(response)});`)
+    .setMimeType(ContentService.MimeType.JAVASCRIPT);
+}
+
+function handleRequest_(params) {
+  try {
+    const action = String(params.action || "").trim();
+    const name = String(params.name || "").trim();
+    const pin = String(params.pin || "").trim();
+
+    if (action !== "CHECK_IN" && action !== "CHECK_OUT") {
+      return fail_("Choose check in or check out.");
+    }
+
+    if (!name || !pin) {
+      return fail_("Name and PIN are required.");
+    }
+
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    setupSheets_(spreadsheet);
+
+    const worker = findWorker_(spreadsheet, name, pin);
+    if (!worker) {
+      return fail_("Name or PIN is incorrect.");
+    }
+
+    const now = new Date();
+    const displayDate = Utilities.formatDate(now, SETTINGS.TIMEZONE, "yyyy-MM-dd");
+    const displayTime = Utilities.formatDate(now, SETTINGS.TIMEZONE, "h:mm a");
+    const lat = String(params.latitude || "").trim();
+    const lng = String(params.longitude || "").trim();
+    const mapLink = lat && lng ? `https://www.google.com/maps?q=${lat},${lng}` : "";
+
+    spreadsheet.getSheetByName(SETTINGS.LOG_SHEET).appendRow([
+      now,
+      displayDate,
+      displayTime,
+      action === "CHECK_IN" ? "Check In" : "Check Out",
+      worker.name,
+      String(params.job || "").trim(),
+      String(params.notes || "").trim(),
+      lat,
+      lng,
+      String(params.accuracyMeters || "").trim(),
+      mapLink,
+      String(params.clientLocalTime || "").trim(),
+      String(params.timezone || "").trim(),
+      String(params.userAgent || "").trim(),
+    ]);
+
+    return {
+      ok: true,
+      name: worker.name,
+      action,
+      date: displayDate,
+      time: displayTime,
+      message: "Saved.",
+    };
+  } catch (error) {
+    return fail_(error.message || "Could not save entry.");
+  }
+}
+
+function setupSheets_(spreadsheet) {
+  let workersSheet = spreadsheet.getSheetByName(SETTINGS.WORKERS_SHEET);
+  if (!workersSheet) {
+    workersSheet = spreadsheet.insertSheet(SETTINGS.WORKERS_SHEET);
+  }
+
+  if (workersSheet.getLastRow() === 0) {
+    workersSheet.appendRow(["Name", "PIN", "Active"]);
+    workersSheet.appendRow(["Example Worker", "1234", "TRUE"]);
+  }
+
+  let logSheet = spreadsheet.getSheetByName(SETTINGS.LOG_SHEET);
+  if (!logSheet) {
+    logSheet = spreadsheet.insertSheet(SETTINGS.LOG_SHEET);
+  }
+
+  if (logSheet.getLastRow() === 0) {
+    logSheet.appendRow([
+      "Timestamp",
+      "Date",
+      "Time",
+      "Action",
+      "Name",
+      "Job",
+      "Notes",
+      "Latitude",
+      "Longitude",
+      "Accuracy Meters",
+      "Map Link",
+      "Worker Local Time",
+      "Worker Timezone",
+      "Device",
+    ]);
+    logSheet.setFrozenRows(1);
+  }
+}
+
+function findWorker_(spreadsheet, name, pin) {
+  const sheet = spreadsheet.getSheetByName(SETTINGS.WORKERS_SHEET);
+  const values = sheet.getDataRange().getValues();
+  const wantedName = name.toLowerCase();
+  const wantedPin = String(pin);
+
+  for (let row = 1; row < values.length; row += 1) {
+    const workerName = String(values[row][0] || "").trim();
+    const workerPin = String(values[row][1] || "").trim();
+    const active = String(values[row][2] || "TRUE").trim().toUpperCase();
+
+    if (workerName.toLowerCase() === wantedName && workerPin === wantedPin && active !== "FALSE") {
+      return { name: workerName };
+    }
+  }
+
+  return null;
+}
+
+function sanitizeCallback_(callback) {
+  return /^[a-zA-Z_$][\w$]*(\.[a-zA-Z_$][\w$]*)*$/.test(callback) ? callback : "callback";
+}
+
+function fail_(message) {
+  return {
+    ok: false,
+    message,
+  };
+}

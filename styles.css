@@ -1,0 +1,250 @@
+:root {
+  color-scheme: light;
+  --blue: #0b4ea2;
+  --deep-blue: #07346d;
+  --red: #e81725;
+  --yellow: #ffd428;
+  --ink: #172033;
+  --muted: #5b6678;
+  --line: #d8dee8;
+  --surface: #ffffff;
+  --page: #eef3f8;
+  --success: #0f7a49;
+  --danger: #b7242f;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  color: var(--ink);
+  background:
+    linear-gradient(135deg, rgba(11, 78, 162, 0.10), transparent 36%),
+    linear-gradient(315deg, rgba(255, 212, 40, 0.16), transparent 35%),
+    var(--page);
+}
+
+.app-shell {
+  width: min(1040px, calc(100% - 32px));
+  min-height: 100vh;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+  gap: 28px;
+  align-items: center;
+  padding: 32px 0;
+}
+
+.brand-panel {
+  display: grid;
+  gap: 18px;
+  align-content: center;
+}
+
+.logo {
+  width: 100%;
+  max-width: 520px;
+  height: auto;
+  filter: drop-shadow(0 16px 24px rgba(7, 52, 109, 0.15));
+}
+
+.status-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-left: 6px solid var(--yellow);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.status-strip span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.status-strip strong {
+  color: var(--deep-blue);
+  font-size: clamp(1.5rem, 4vw, 2.4rem);
+  line-height: 1;
+}
+
+.check-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-top: 7px solid var(--blue);
+  border-radius: 8px;
+  box-shadow: 0 18px 42px rgba(23, 32, 51, 0.12);
+  padding: clamp(22px, 4vw, 34px);
+}
+
+.card-heading {
+  margin-bottom: 24px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: var(--red);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  color: var(--deep-blue);
+  font-size: clamp(2rem, 5vw, 3.1rem);
+  line-height: 1;
+}
+
+form {
+  display: grid;
+  gap: 16px;
+}
+
+label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-weight: 750;
+}
+
+input,
+textarea {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 11px 12px;
+  color: var(--ink);
+  background: #fbfcfe;
+  font: inherit;
+}
+
+textarea {
+  resize: vertical;
+  min-height: 86px;
+}
+
+input:focus,
+textarea:focus,
+button:focus-visible {
+  outline: 3px solid rgba(255, 212, 40, 0.72);
+  outline-offset: 2px;
+  border-color: var(--blue);
+}
+
+.location-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  min-height: 64px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f6f9fc;
+}
+
+.location-label {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+#locationStatus {
+  color: var(--deep-blue);
+}
+
+.icon-button {
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--deep-blue);
+  background: white;
+  font-size: 1.3rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.primary {
+  min-height: 54px;
+  border: 0;
+  border-radius: 6px;
+  color: white;
+  font: inherit;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.primary.in {
+  background: var(--success);
+}
+
+.primary.out {
+  background: var(--danger);
+}
+
+.primary:disabled,
+.icon-button:disabled {
+  opacity: 0.62;
+  cursor: progress;
+}
+
+.message {
+  min-height: 24px;
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.message.good {
+  color: var(--success);
+}
+
+.message.bad {
+  color: var(--danger);
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    width: min(100% - 24px, 520px);
+    grid-template-columns: 1fr;
+    align-items: start;
+    padding: 18px 0 26px;
+  }
+
+  .brand-panel {
+    gap: 10px;
+  }
+
+  .logo {
+    max-width: 390px;
+    margin: 0 auto;
+  }
+
+  .check-card {
+    padding: 20px;
+  }
+
+  .actions {
+    grid-template-columns: 1fr;
+  }
+}

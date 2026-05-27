@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b4ea2" />
+    <title>Fateh Time Check-In</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="brand-panel" aria-label="Fateh Plumbing and Electric">
+        <img src="assets/fateh-logo.png" alt="Fateh Plumbing and Electric" class="logo" />
+        <div class="status-strip">
+          <span id="todayText">Today</span>
+          <strong id="clockText">--:--</strong>
+        </div>
+      </section>
+
+      <section class="check-card" aria-labelledby="pageTitle">
+        <div class="card-heading">
+          <p class="eyebrow">Crew time log</p>
+          <h1 id="pageTitle">Check in or out</h1>
+        </div>
+
+        <form id="timeForm" autocomplete="on">
+          <label>
+            <span>Worker name</span>
+            <input id="workerName" name="name" type="text" autocomplete="name" required />
+          </label>
+
+          <label>
+            <span>PIN</span>
+            <input
+              id="workerPin"
+              name="pin"
+              type="password"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+              required
+            />
+          </label>
+
+          <label>
+            <span>Job</span>
+            <input id="jobName" name="job" type="text" placeholder="Optional" />
+          </label>
+
+          <label>
+            <span>Notes</span>
+            <textarea id="notes" name="notes" rows="3" placeholder="Optional"></textarea>
+          </label>
+
+          <div class="location-box" id="locationBox">
+            <div>
+              <span class="location-label">Location</span>
+              <strong id="locationStatus">Waiting for permission</strong>
+            </div>
+            <button type="button" id="refreshLocation" class="icon-button" aria-label="Refresh location" title="Refresh location">
+              R
+            </button>
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="primary in" data-action="CHECK_IN">Check In</button>
+            <button type="submit" class="primary out" data-action="CHECK_OUT">Check Out</button>
+          </div>
+        </form>
+
+        <p id="message" class="message" role="status" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
