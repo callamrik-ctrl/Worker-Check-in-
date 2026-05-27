@@ -1,7 +1,6 @@
 const SETTINGS = {
   WORKERS_SHEET: "Workers",
   LOG_SHEET: "Time Log",
-  HOURS_SHEET: "Daily Hours",
   TIMEZONE: "America/Toronto",
 };
 
@@ -61,7 +60,6 @@ function handleRequest_(params) {
       String(params.timezone || "").trim(),
       String(params.userAgent || "").trim(),
     ]);
-    rebuildDailyHours_(spreadsheet);
 
     return {
       ok: true,
@@ -111,123 +109,6 @@ function setupSheets_(spreadsheet) {
     ]);
     logSheet.setFrozenRows(1);
   }
-
-  let hoursSheet = spreadsheet.getSheetByName(SETTINGS.HOURS_SHEET);
-  if (!hoursSheet) {
-    hoursSheet = spreadsheet.insertSheet(SETTINGS.HOURS_SHEET);
-  }
-
-  if (hoursSheet.getLastRow() === 0) {
-    hoursSheet.appendRow([
-      "Date",
-      "Name",
-      "First Check In",
-      "Last Check Out",
-      "Total Hours",
-      "Status",
-      "Jobs",
-      "Notes",
-    ]);
-    hoursSheet.setFrozenRows(1);
-  }
-}
-
-function rebuildDailyHours_(spreadsheet) {
-  const logSheet = spreadsheet.getSheetByName(SETTINGS.LOG_SHEET);
-  const hoursSheet = spreadsheet.getSheetByName(SETTINGS.HOURS_SHEET);
-  const values = logSheet.getDataRange().getValues();
-  const groups = {};
-
-  for (let row = 1; row < values.length; row += 1) {
-    const timestamp = values[row][0];
-    const date = String(values[row][1] || "").trim();
-    const action = String(values[row][3] || "").trim();
-    const name = String(values[row][4] || "").trim();
-    const job = String(values[row][5] || "").trim();
-    const notes = String(values[row][6] || "").trim();
-
-    if (!date || !name || !(timestamp instanceof Date)) {
-      continue;
-    }
-
-    const key = `${date}|${name}`;
-    if (!groups[key]) {
-      groups[key] = {
-        date,
-        name,
-        events: [],
-        jobs: [],
-        notes: [],
-      };
-    }
-
-    groups[key].events.push({ timestamp, action });
-    if (job) groups[key].jobs.push(job);
-    if (notes) groups[key].notes.push(notes);
-  }
-
-  const rows = Object.keys(groups)
-    .sort()
-    .map((key) => {
-      const group = groups[key];
-      group.events.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
-
-      let openCheckIn = null;
-      let firstCheckIn = null;
-      let lastCheckOut = null;
-      let totalMs = 0;
-
-      group.events.forEach((event) => {
-        if (event.action === "Check In") {
-          openCheckIn = event.timestamp;
-          if (!firstCheckIn) firstCheckIn = event.timestamp;
-        }
-
-        if (event.action === "Check Out") {
-          lastCheckOut = event.timestamp;
-          if (openCheckIn && event.timestamp > openCheckIn) {
-            totalMs += event.timestamp.getTime() - openCheckIn.getTime();
-            openCheckIn = null;
-          }
-        }
-      });
-
-      const totalHours = totalMs ? Math.round((totalMs / 36e5) * 100) / 100 : "";
-      const status = openCheckIn ? "Checked In" : "Complete";
-
-      return [
-        group.date,
-        group.name,
-        firstCheckIn ? Utilities.formatDate(firstCheckIn, SETTINGS.TIMEZONE, "h:mm a") : "",
-        lastCheckOut ? Utilities.formatDate(lastCheckOut, SETTINGS.TIMEZONE, "h:mm a") : "",
-        totalHours,
-        status,
-        uniqueText_(group.jobs),
-        uniqueText_(group.notes),
-      ];
-    });
-
-  hoursSheet.clearContents();
-  hoursSheet.appendRow([
-    "Date",
-    "Name",
-    "First Check In",
-    "Last Check Out",
-    "Total Hours",
-    "Status",
-    "Jobs",
-    "Notes",
-  ]);
-
-  if (rows.length) {
-    hoursSheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-  }
-
-  hoursSheet.setFrozenRows(1);
-}
-
-function uniqueText_(items) {
-  return [...new Set(items)].join("; ");
 }
 
 function findWorker_(spreadsheet, name, pin) {
