@@ -21,7 +21,7 @@ function handleRequest_(params) {
     const name = String(params.name || "").trim();
     const pin = String(params.pin || "").trim();
 
-    if (action !== "CHECK_IN" && action !== "CHECK_OUT") {
+    if (action !== "CHECK_IN" && action !== "CHECK_OUT" && action !== "CHECK_STATUS") {
       return fail_("Choose check in or check out.");
     }
 
@@ -38,12 +38,22 @@ function handleRequest_(params) {
     }
 
     const currentStatus = getWorkerStatus_(spreadsheet, worker.name);
+    if (action === "CHECK_STATUS") {
+      return {
+        ok: true,
+        name: worker.name,
+        lastAction: currentStatus.lastAction,
+        nextAction: currentStatus.lastAction === "Check In" ? "CHECK_OUT" : "CHECK_IN",
+        message: currentStatus.lastAction === "Check In" ? "Ready to check out." : "Ready to check in.",
+      };
+    }
+
     if (action === "CHECK_IN" && currentStatus.lastAction === "Check In") {
-      return fail_(`${worker.name} is already checked in. Please check out first.`);
+      return fail_(`${worker.name} is already checked in. Please check out first.`, "CHECK_OUT");
     }
 
     if (action === "CHECK_OUT" && currentStatus.lastAction !== "Check In") {
-      return fail_(`${worker.name} is not checked in. Please check in first.`);
+      return fail_(`${worker.name} is not checked in. Please check in first.`, "CHECK_IN");
     }
 
     const now = new Date();
@@ -374,9 +384,10 @@ function sanitizeCallback_(callback) {
   return /^[a-zA-Z_$][\w$]*(\.[a-zA-Z_$][\w$]*)*$/.test(callback) ? callback : "callback";
 }
 
-function fail_(message) {
+function fail_(message, nextAction) {
   return {
     ok: false,
     message,
+    nextAction: nextAction || "",
   };
 }

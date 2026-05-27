@@ -6,9 +6,14 @@ const todayText = document.querySelector("#todayText");
 const locationStatus = document.querySelector("#locationStatus");
 const refreshLocation = document.querySelector("#refreshLocation");
 const actionButtons = Array.from(document.querySelectorAll("[data-action]"));
+const workerNameInput = document.querySelector("#workerName");
+const workerPinInput = document.querySelector("#workerPin");
 
 let currentPosition = null;
 let pendingAction = "CHECK_IN";
+let allowedAction = null;
+let busy = false;
+let statusTimer = null;
 
 function updateClock() {
   const now = new Date();
@@ -29,11 +34,16 @@ function setMessage(text, type = "") {
   message.className = `message ${type}`.trim();
 }
 
-function setBusy(isBusy) {
+function updateActionButtons() {
   actionButtons.forEach((button) => {
-    button.disabled = isBusy;
+    button.disabled = busy || (allowedAction && button.dataset.action !== allowedAction);
   });
-  refreshLocation.disabled = isBusy;
+}
+
+function setBusy(nextBusy) {
+  busy = nextBusy;
+  updateActionButtons();
+  refreshLocation.disabled = nextBusy;
 }
 
 function setNextAction(nextAction) {
@@ -41,10 +51,45 @@ function setNextAction(nextAction) {
     return;
   }
 
-  actionButtons.forEach((button) => {
-    button.disabled = button.dataset.action !== nextAction;
-  });
+  allowedAction = nextAction;
+  updateActionButtons();
   pendingAction = nextAction;
+}
+
+function queueStatusCheck() {
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(checkWorkerStatus, 450);
+}
+
+async function checkWorkerStatus() {
+  const scriptUrl = (config.scriptUrl || "").trim();
+  const name = workerNameInput.value.trim();
+  const pin = workerPinInput.value.trim();
+
+  if (!scriptUrl || !name || !pin) {
+    allowedAction = null;
+    updateActionButtons();
+    return;
+  }
+
+  try {
+    const response = await jsonpRequest(scriptUrl, {
+      action: "CHECK_STATUS",
+      name,
+      pin,
+    });
+
+    if (!response || response.ok !== true) {
+      allowedAction = null;
+      updateActionButtons();
+      return;
+    }
+
+    setNextAction(response.nextAction);
+    setMessage(`${response.name}: ${response.message}`, "");
+  } catch {
+    allowedAction = null;
+  }
 }
 
 function requestLocation() {
@@ -148,6 +193,9 @@ async function submitTime(action) {
     });
 
     if (!response || response.ok !== true) {
+      if (response?.nextAction) {
+        setNextAction(response.nextAction);
+      }
       throw new Error(response?.message || "The entry was not saved.");
     }
 
@@ -160,16 +208,15 @@ async function submitTime(action) {
   } catch (error) {
     setMessage(error.message || "Something went wrong. Try again.", "bad");
   } finally {
-    if (!message.classList.contains("good")) {
-      setBusy(false);
-    } else {
-      refreshLocation.disabled = false;
-    }
+    setBusy(false);
   }
 }
 
 actionButtons.forEach((button) => {
   button.addEventListener("click", () => {
+    if (allowedAction && button.dataset.action !== allowedAction) {
+      return;
+    }
     pendingAction = button.dataset.action;
   });
 });
@@ -180,6 +227,8 @@ form.addEventListener("submit", (event) => {
 });
 
 refreshLocation.addEventListener("click", requestLocation);
+workerNameInput.addEventListener("input", queueStatusCheck);
+workerPinInput.addEventListener("input", queueStatusCheck);
 
 updateClock();
 setInterval(updateClock, 1000);
