@@ -38,7 +38,7 @@ function setMessage(text, type = "") {
 
 function updateActionButtons() {
   actionButtons.forEach((button) => {
-    button.disabled = busy || !allowedAction || button.dataset.action !== allowedAction;
+    button.disabled = busy || (allowedAction && button.dataset.action !== allowedAction);
   });
 }
 
@@ -85,7 +85,11 @@ async function checkWorkerStatus() {
     if (!response || response.ok !== true) {
       allowedAction = null;
       updateActionButtons();
-      setMessage(response?.message || "Enter a valid name and PIN.", "bad");
+      if (response?.message === "Choose check in or check out.") {
+        setMessage("Status check needs latest Apps Script deployment. Buttons are available for now.");
+      } else {
+        setMessage(response?.message || "Enter a valid name and PIN.", "bad");
+      }
       return;
     }
 
@@ -157,13 +161,7 @@ function jsonpRequest(url, params) {
 }
 
 async function submitTime(action) {
-  if (!allowedAction) {
-    setMessage("Enter name and PIN first so current status can load.", "bad");
-    queueStatusCheck();
-    return;
-  }
-
-  if (action !== allowedAction) {
+  if (allowedAction && action !== allowedAction) {
     setMessage(
       allowedAction === "CHECK_IN" ? "This worker needs to check in first." : "This worker needs to check out first.",
       "bad",
