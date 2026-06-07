@@ -15,6 +15,7 @@ let pendingAction = "CHECK_IN";
 let allowedAction = null;
 let busy = false;
 let statusTimer = null;
+let locationTimer = null;
 
 updateActionButtons();
 
@@ -119,32 +120,42 @@ async function checkWorkerStatus() {
 }
 
 function requestLocation() {
+  clearTimeout(locationTimer);
   if (!navigator.geolocation) {
     locationStatus.textContent = "Location is not supported on this device";
-    setMessage("This device/browser cannot read GPS location.", "bad");
+    setMessage("GPS is unavailable on this device. You can continue without location.");
     return;
   }
 
   locationStatus.textContent = "Getting current location...";
+  locationTimer = setTimeout(() => {
+    if (!currentPosition) {
+      locationStatus.textContent = "Location unavailable, continue without GPS";
+      setMessage("GPS did not respond. You can still submit without location.");
+    }
+  }, 8000);
+
   navigator.geolocation.getCurrentPosition(
     (position) => {
+      clearTimeout(locationTimer);
       currentPosition = position;
       const accuracy = Math.round(position.coords.accuracy);
       locationStatus.textContent = `Ready, accurate within about ${accuracy} m`;
     },
     (error) => {
+      clearTimeout(locationTimer);
       currentPosition = null;
       const reason =
         error.code === error.PERMISSION_DENIED
           ? "Location permission was denied"
           : "Could not get current location";
       locationStatus.textContent = reason;
-      setMessage("Please allow location before checking in or out.", "bad");
+      setMessage("GPS is not available right now. You can continue without location.");
     },
     {
       enableHighAccuracy: true,
-      timeout: 12000,
-      maximumAge: 60000,
+      timeout: 8000,
+      maximumAge: 300000,
     },
   );
 }
@@ -193,19 +204,13 @@ async function submitTime(action) {
     return;
   }
 
-  if (!currentPosition) {
-    setMessage("GPS location is required. Tap refresh and allow location.", "bad");
-    requestLocation();
-    return;
-  }
-
   if (!form.reportValidity()) {
     return;
   }
 
   const now = new Date();
   const formData = new FormData(form);
-  const coords = currentPosition.coords;
+  const coords = currentPosition?.coords || null;
 
   setBusy(true);
   setMessage(action === "CHECK_IN" ? "Saving check in..." : "Saving check out...");
@@ -220,9 +225,9 @@ async function submitTime(action) {
       clientLocalTime: now.toLocaleString(),
       clientIsoTime: now.toISOString(),
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
-      latitude: coords.latitude.toFixed(7),
-      longitude: coords.longitude.toFixed(7),
-      accuracyMeters: Math.round(coords.accuracy),
+      latitude: coords ? coords.latitude.toFixed(7) : "",
+      longitude: coords ? coords.longitude.toFixed(7) : "",
+      accuracyMeters: coords ? Math.round(coords.accuracy) : "",
       userAgent: navigator.userAgent,
     });
 
