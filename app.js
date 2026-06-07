@@ -8,6 +8,7 @@ const refreshLocation = document.querySelector("#refreshLocation");
 const actionButtons = Array.from(document.querySelectorAll("[data-action]"));
 const workerNameInput = document.querySelector("#workerName");
 const workerPinInput = document.querySelector("#workerPin");
+const actions = document.querySelector(".actions");
 
 let currentPosition = null;
 let pendingAction = "CHECK_IN";
@@ -37,9 +38,18 @@ function setMessage(text, type = "") {
 }
 
 function updateActionButtons() {
+  const hasPin = workerPinInput.value.trim() !== "";
+  let visibleCount = 0;
   actionButtons.forEach((button) => {
-    button.disabled = busy || (allowedAction && button.dataset.action !== allowedAction);
+    const isAllowed = !allowedAction || button.dataset.action === allowedAction;
+    const shouldHide = !hasPin || (allowedAction && !isAllowed);
+    button.classList.toggle("is-hidden", shouldHide);
+    button.disabled = busy || shouldHide || !isAllowed;
+    if (!button.classList.contains("is-hidden")) {
+      visibleCount += 1;
+    }
   });
+  actions.classList.toggle("single", visibleCount === 1);
 }
 
 function setBusy(nextBusy) {
@@ -60,30 +70,33 @@ function setNextAction(nextAction) {
 
 function queueStatusCheck() {
   clearTimeout(statusTimer);
+  allowedAction = null;
+  workerNameInput.value = "";
+  updateActionButtons();
   statusTimer = setTimeout(checkWorkerStatus, 450);
 }
 
 async function checkWorkerStatus() {
   const scriptUrl = (config.scriptUrl || "").trim();
-  const name = workerNameInput.value.trim();
   const pin = workerPinInput.value.trim();
 
-  if (!scriptUrl || !name || !pin) {
+  if (!scriptUrl || !pin) {
     allowedAction = null;
+    workerNameInput.value = "";
     updateActionButtons();
-    setMessage("Enter name and PIN to load current status.");
+    setMessage("Enter worker PIN to load current status.");
     return;
   }
 
   try {
     const response = await jsonpRequest(scriptUrl, {
       action: "CHECK_STATUS",
-      name,
       pin,
     });
 
     if (!response || response.ok !== true) {
       allowedAction = null;
+      workerNameInput.value = "";
       updateActionButtons();
       if (response?.message === "Choose check in or check out.") {
         setMessage("Status check needs latest Apps Script deployment. Buttons are available for now.");
@@ -93,6 +106,7 @@ async function checkWorkerStatus() {
       return;
     }
 
+    workerNameInput.value = response.name || "";
     setNextAction(response.nextAction);
     setMessage(`${response.name}: ${response.message}`, "");
   } catch {
@@ -195,8 +209,8 @@ async function submitTime(action) {
   try {
     const response = await jsonpRequest(scriptUrl, {
       action,
-      name: String(formData.get("name") || "").trim(),
       pin: String(formData.get("pin") || "").trim(),
+      name: String(formData.get("name") || "").trim(),
       job: String(formData.get("job") || "").trim(),
       notes: String(formData.get("notes") || "").trim(),
       clientLocalTime: now.toLocaleString(),
@@ -243,7 +257,6 @@ form.addEventListener("submit", (event) => {
 });
 
 refreshLocation.addEventListener("click", requestLocation);
-workerNameInput.addEventListener("input", queueStatusCheck);
 workerPinInput.addEventListener("input", queueStatusCheck);
 
 updateClock();

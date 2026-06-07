@@ -25,19 +25,26 @@
 
         <form id="timeForm" autocomplete="on">
           <label>
-            <span>Worker name</span>
-            <input id="workerName" name="name" type="text" autocomplete="name" required />
-          </label>
-
-          <label>
-            <span>PIN</span>
+            <span>Worker PIN</span>
             <input
               id="workerPin"
               name="pin"
               type="password"
               inputmode="numeric"
               autocomplete="one-time-code"
+              placeholder="Enter PIN"
               required
+            />
+          </label>
+
+          <label>
+            <span>Worker name</span>
+            <input
+              id="workerName"
+              name="name"
+              type="text"
+              placeholder="Name appears after PIN"
+              readonly
             />
           </label>
 
@@ -71,7 +78,7 @@
       </section>
     </main>
 
-    <script src="config.js?v=6"></script>
-    <script src="app.js?v=6"></script>
+    <script src="config.js?v=7"></script>
+    <script src="app.js?v=7"></script>
   </body>
 </html>

@@ -25,8 +25,8 @@ function handleRequest_(params) {
       return fail_("Choose check in or check out.");
     }
 
-    if (!name || !pin) {
-      return fail_("Name and PIN are required.");
+    if (!pin) {
+      return fail_("Worker PIN is required.");
     }
 
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
@@ -155,7 +155,7 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
   const logRange = spreadsheet.getSheetByName(SETTINGS.LOG_SHEET).getDataRange();
   const logValues = logRange.getValues();
   const logDisplayValues = logRange.getDisplayValues();
-  const entries = [];
+  const generatedEntries = [];
   const days = {};
   const targetName = normalizeName_(workerName);
 
@@ -176,7 +176,7 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
       continue;
     }
 
-    entries.push([date, time, action, job, notes, lat, lng, accuracy, mapLink]);
+    generatedEntries.push([date, time, action, job, notes, lat, lng, accuracy, mapLink]);
 
     if (!date || !(timestamp instanceof Date)) {
       continue;
@@ -238,6 +238,8 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
         manual.payNotes || "",
       ];
     });
+  const manualEntries = readManualTimeEntries_(sheet, generatedEntries);
+  const entries = generatedEntries.concat(manualEntries);
 
   sheet.clearContents();
   writeWorkerHeaders_(sheet);
@@ -322,6 +324,35 @@ function readManualSummaryValues_(sheet) {
   return manualValues;
 }
 
+function readManualTimeEntries_(sheet, generatedEntries) {
+  const values = sheet.getDataRange().getDisplayValues();
+  const generatedKeys = {};
+
+  generatedEntries.forEach((entry) => {
+    generatedKeys[getEntryKey_(entry)] = true;
+  });
+
+  const manualEntries = [];
+  for (let row = 2; row < values.length; row += 1) {
+    const entry = values[row].slice(0, 9);
+    const hasEntry = entry.slice(0, 3).some((value) => String(value || "").trim());
+
+    if (!hasEntry) {
+      continue;
+    }
+
+    if (!generatedKeys[getEntryKey_(entry)]) {
+      manualEntries.push(entry);
+    }
+  }
+
+  return manualEntries;
+}
+
+function getEntryKey_(entry) {
+  return entry.map((value) => String(value || "").trim()).join("|");
+}
+
 function getWorkerSheetName_(workerName) {
   const cleaned = String(workerName || "Worker")
     .replace(/[\[\]\*\?\/\\:]/g, "-")
@@ -347,7 +378,8 @@ function findWorker_(spreadsheet, name, pin) {
     const workerPin = String(values[row][1] || "").trim();
     const active = String(values[row][2] || "TRUE").trim().toUpperCase();
 
-    if (normalizeName_(workerName) === wantedName && workerPin === wantedPin && active !== "FALSE") {
+    const nameMatches = !wantedName || normalizeName_(workerName) === wantedName;
+    if (nameMatches && workerPin === wantedPin && active !== "FALSE") {
       return { name: workerName };
     }
   }

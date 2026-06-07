@@ -142,6 +142,12 @@ button:focus-visible {
   border-color: var(--blue);
 }
 
+input[readonly] {
+  color: var(--deep-blue);
+  background: #eaf2ff;
+  font-weight: 800;
+}
+
 .location-box {
   display: flex;
   justify-content: space-between;
@@ -182,6 +188,14 @@ button:focus-visible {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+.actions.single {
+  grid-template-columns: 1fr;
+}
+
+.is-hidden {
+  display: none;
 }
 
 .primary {
