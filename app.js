@@ -39,10 +39,11 @@ function setMessage(text, type = "") {
 
 function updateActionButtons() {
   const hasPin = workerPinInput.value.trim() !== "";
+  const hasWorker = workerNameInput.value.trim() !== "";
   let visibleCount = 0;
   actionButtons.forEach((button) => {
     const isAllowed = !allowedAction || button.dataset.action === allowedAction;
-    const shouldHide = !hasPin || (allowedAction && !isAllowed);
+    const shouldHide = !hasPin || !hasWorker || (allowedAction && !isAllowed);
     button.classList.toggle("is-hidden", shouldHide);
     button.disabled = busy || shouldHide || !isAllowed;
     if (!button.classList.contains("is-hidden")) {
@@ -98,8 +99,11 @@ async function checkWorkerStatus() {
       allowedAction = null;
       workerNameInput.value = "";
       updateActionButtons();
-      if (response?.message === "Choose check in or check out.") {
-        setMessage("Status check needs latest Apps Script deployment. Buttons are available for now.");
+      if (
+        response?.message === "Choose check in or check out." ||
+        response?.message === "Name and PIN are required."
+      ) {
+        setMessage("Apps Script deployment is old. Deploy a new Web App version to use PIN lookup.", "bad");
       } else {
         setMessage(response?.message || "Enter a valid name and PIN.", "bad");
       }

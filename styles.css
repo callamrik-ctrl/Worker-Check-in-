@@ -45,16 +45,18 @@ body {
   display: grid;
   gap: 18px;
   align-content: center;
+  justify-items: center;
 }
 
 .logo {
   width: 100%;
-  max-width: 520px;
+  max-width: 360px;
   height: auto;
   filter: drop-shadow(0 16px 24px rgba(7, 52, 109, 0.15));
 }
 
 .status-strip {
+  width: min(100%, 390px);
   display: flex;
   justify-content: space-between;
   align-items: center;
