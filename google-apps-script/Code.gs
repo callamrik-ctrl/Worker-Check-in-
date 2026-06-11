@@ -458,7 +458,7 @@ function insertWeeklyGapRows_(sheet) {
     const nextDateValue = String(sheet.getRange(row + 1, 11).getDisplayValue() || "").trim();
     const nextDate = parseDisplayDate_(nextDateValue);
 
-    if (date && nextDate && date.getDay() === 0 && nextDate > date) {
+    if (date && nextDate && getMondayWeekStart_(nextDate) > getMondayWeekStart_(date)) {
       sheet.insertRowsAfter(row, 1);
       row += 2;
     } else {
@@ -471,6 +471,14 @@ function parseDisplayDate_(dateText) {
   if (!dateText) return null;
   const date = new Date(dateText);
   return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getMondayWeekStart_(date) {
+  const weekStart = new Date(date);
+  const daysSinceMonday = (weekStart.getDay() + 6) % 7;
+  weekStart.setDate(weekStart.getDate() - daysSinceMonday);
+  weekStart.setHours(0, 0, 0, 0);
+  return weekStart.getTime();
 }
 
 function getWorkerSheetName_(workerName) {
