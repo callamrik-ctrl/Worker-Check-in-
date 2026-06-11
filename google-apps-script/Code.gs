@@ -189,23 +189,26 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
       continue;
     }
 
-    if (!days[date]) {
-      days[date] = {
+    const dateKey = Utilities.formatDate(timestamp, SETTINGS.TIMEZONE, "yyyy-MM-dd");
+    if (!days[dateKey]) {
+      days[dateKey] = {
+        displayDate: date,
         events: [],
         jobs: [],
         notes: [],
       };
     }
 
-    days[date].events.push({ timestamp, action });
-    if (job) days[date].jobs.push(job);
-    if (notes) days[date].notes.push(notes);
+    days[dateKey].events.push({ timestamp, action });
+    if (job) days[dateKey].jobs.push(job);
+    if (notes) days[dateKey].notes.push(notes);
   }
 
   const summaryRows = Object.keys(days)
     .sort()
-    .map((date) => {
-      const day = days[date];
+    .map((dateKey) => {
+      const day = days[dateKey];
+      const date = day.displayDate;
       day.events.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
 
       let openCheckIn = null;
