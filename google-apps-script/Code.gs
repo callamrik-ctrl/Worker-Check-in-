@@ -19,6 +19,21 @@ function refreshAllWorkerSheets() {
   });
 }
 
+function installStableWorkerHoursFix() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const workerNames = getWorkerNames_(spreadsheet);
+  const activeWorkerNames = getActiveWorkerNames_(spreadsheet)
+    .filter((workerName) => !isRepairProtectedSheet_(getWorkerSheetName_(workerName)));
+
+  backupWorkerSheets_(spreadsheet, workerNames);
+  setupManualAdjustmentsSheet_(spreadsheet);
+  clearManualAdjustments_(spreadsheet);
+
+  activeWorkerNames.forEach((workerName) => {
+    rebuildWorkerSheet_(spreadsheet, workerName, { preserveManualValues: false });
+  });
+}
+
 function doGet(e) {
   const callback = sanitizeCallback_(e.parameter.callback || "callback");
   const response = handleRequest_(e.parameter);
@@ -150,15 +165,18 @@ function setupSheets_(spreadsheet, populateWorkerSheets) {
   }
 }
 
-function rebuildWorkerSheet_(spreadsheet, workerName) {
+function rebuildWorkerSheet_(spreadsheet, workerName, options) {
+  const shouldPreserveManualValues = !options || options.preserveManualValues !== false;
   const sheetName = getWorkerSheetName_(workerName);
   let sheet = spreadsheet.getSheetByName(sheetName);
   if (!sheet) {
     sheet = spreadsheet.insertSheet(sheetName);
   }
 
-  saveManualAdjustmentsForWorker_(spreadsheet, workerName);
-  const manualValues = readManualAdjustments_(spreadsheet, workerName);
+  if (shouldPreserveManualValues) {
+    saveManualAdjustmentsForWorker_(spreadsheet, workerName);
+  }
+  const manualValues = shouldPreserveManualValues ? readManualAdjustments_(spreadsheet, workerName) : {};
   const logRange = spreadsheet.getSheetByName(SETTINGS.LOG_SHEET).getDataRange();
   const logValues = logRange.getValues();
   const logDisplayValues = logRange.getDisplayValues();
@@ -335,6 +353,14 @@ function setupManualAdjustmentsSheet_(spreadsheet) {
   }
 }
 
+function clearManualAdjustments_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName(SETTINGS.MANUAL_SHEET);
+  const lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    sheet.deleteRows(2, lastRow - 1);
+  }
+}
+
 function saveAllManualAdjustments_(spreadsheet) {
   getWorkerNames_(spreadsheet).forEach((workerName) => {
     saveManualAdjustmentsForWorker_(spreadsheet, workerName);
@@ -443,6 +469,55 @@ function getWorkerNames_(spreadsheet) {
   }
 
   return names;
+}
+
+function getActiveWorkerNames_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName(SETTINGS.WORKERS_SHEET);
+  const values = sheet.getDataRange().getValues();
+  const names = [];
+
+  for (let row = 1; row < values.length; row += 1) {
+    const workerName = String(values[row][0] || "").trim();
+    const active = String(values[row][2] || "TRUE").trim().toUpperCase();
+    if (workerName && active !== "FALSE") names.push(workerName);
+  }
+
+  return names;
+}
+
+function backupWorkerSheets_(spreadsheet, workerNames) {
+  const backupStamp = Utilities.formatDate(new Date(), SETTINGS.TIMEZONE, "yyyyMMdd HHmmss");
+
+  workerNames.forEach((workerName) => {
+    const sheetName = getWorkerSheetName_(workerName);
+    if (isRepairProtectedSheet_(sheetName)) return;
+
+    const sheet = spreadsheet.getSheetByName(sheetName);
+    if (!sheet) return;
+
+    sheet.copyTo(spreadsheet).setName(getUniqueBackupSheetName_(spreadsheet, sheetName, backupStamp));
+  });
+}
+
+function getUniqueBackupSheetName_(spreadsheet, sheetName, backupStamp) {
+  const baseName = `${sheetName} Backup ${backupStamp}`.slice(0, 90);
+  let backupName = baseName;
+  let count = 2;
+
+  while (spreadsheet.getSheetByName(backupName)) {
+    backupName = `${baseName} ${count}`.slice(0, 99);
+    count += 1;
+  }
+
+  return backupName;
+}
+
+function isRepairProtectedSheet_(sheetName) {
+  return [
+    SETTINGS.WORKERS_SHEET,
+    SETTINGS.LOG_SHEET,
+    "Rishav Early Sheet",
+  ].indexOf(sheetName) !== -1 || /backup/i.test(sheetName);
 }
 
 function insertWeeklyGapRows_(sheet) {
