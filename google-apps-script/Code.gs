@@ -1,11 +1,22 @@
 const SETTINGS = {
   WORKERS_SHEET: "Workers",
   LOG_SHEET: "Time Log",
+  MANUAL_SHEET: "Manual Adjustments",
   TIMEZONE: "America/Toronto",
 };
 
 function setup() {
   setupSheets_(SpreadsheetApp.getActiveSpreadsheet(), true);
+}
+
+function refreshAllWorkerSheets() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  setupSheets_(spreadsheet, false);
+  saveAllManualAdjustments_(spreadsheet);
+
+  getWorkerNames_(spreadsheet).forEach((workerName) => {
+    rebuildWorkerSheet_(spreadsheet, workerName);
+  });
 }
 
 function doGet(e) {
@@ -132,15 +143,10 @@ function setupSheets_(spreadsheet, populateWorkerSheets) {
     logSheet.setFrozenRows(1);
   }
   formatLogSheet_(logSheet);
+  setupManualAdjustmentsSheet_(spreadsheet);
 
   if (populateWorkerSheets) {
-    const workerValues = workersSheet.getDataRange().getValues();
-    for (let row = 1; row < workerValues.length; row += 1) {
-      const workerName = String(workerValues[row][0] || "").trim();
-      if (workerName) {
-        rebuildWorkerSheet_(spreadsheet, workerName);
-      }
-    }
+    refreshAllWorkerSheets();
   }
 }
 
@@ -151,11 +157,12 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
     sheet = spreadsheet.insertSheet(sheetName);
   }
 
-  const manualValues = readManualSummaryValues_(sheet);
+  saveManualAdjustmentsForWorker_(spreadsheet, workerName);
+  const manualValues = readManualAdjustments_(spreadsheet, workerName);
   const logRange = spreadsheet.getSheetByName(SETTINGS.LOG_SHEET).getDataRange();
   const logValues = logRange.getValues();
   const logDisplayValues = logRange.getDisplayValues();
-  const generatedEntries = [];
+  const entries = [];
   const days = {};
   const targetName = normalizeName_(workerName);
 
@@ -176,7 +183,7 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
       continue;
     }
 
-    generatedEntries.push([date, time, action, job, notes, lat, lng, accuracy, mapLink]);
+    entries.push([date, time, action, job, notes, lat, lng, accuracy, mapLink]);
 
     if (!date || !(timestamp instanceof Date)) {
       continue;
@@ -221,8 +228,9 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
         }
       });
 
-      const manual = manualValues[date] || {};
+      const manual = manualValues[getManualKey_(workerName, date)] || {};
       const autoHours = totalMs ? Math.round((totalMs / 36e5) * 100) / 100 : "";
+      const autoPayableHours = autoHours;
       const status = openCheckIn ? "Checked In" : "Complete";
 
       return [
@@ -230,7 +238,9 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
         firstCheckIn ? Utilities.formatDate(firstCheckIn, SETTINGS.TIMEZONE, "h:mm a") : "",
         lastCheckOut ? Utilities.formatDate(lastCheckOut, SETTINGS.TIMEZONE, "h:mm a") : "",
         autoHours,
+        autoPayableHours,
         manual.manualHours || "",
+        "",
         manual.payRate || "",
         "",
         status,
@@ -238,8 +248,6 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
         manual.payNotes || "",
       ];
     });
-  const manualEntries = readManualTimeEntries_(sheet, generatedEntries);
-  const entries = generatedEntries.concat(manualEntries);
 
   sheet.clearContents();
   writeWorkerHeaders_(sheet);
@@ -250,16 +258,22 @@ function rebuildWorkerSheet_(spreadsheet, workerName) {
 
   if (summaryRows.length) {
     sheet.getRange(3, 11, summaryRows.length, summaryRows[0].length).setValues(summaryRows);
-    const formulas = summaryRows.map((row, index) => {
+    const finalHourFormulas = summaryRows.map((row, index) => {
       const rowNumber = index + 3;
-      return [`=IF(P${rowNumber}<>"",IF(O${rowNumber}<>"",O${rowNumber},N${rowNumber})*P${rowNumber},"")`];
+      return [`=IF(OR(O${rowNumber}<>"",P${rowNumber}<>""),N(O${rowNumber})+N(P${rowNumber}),"")`];
     });
-    sheet.getRange(3, 17, formulas.length, 1).setFormulas(formulas);
+    const payAmountFormulas = summaryRows.map((row, index) => {
+      const rowNumber = index + 3;
+      return [`=IF(R${rowNumber}<>"",Q${rowNumber}*R${rowNumber},"")`];
+    });
+    sheet.getRange(3, 17, finalHourFormulas.length, 1).setFormulas(finalHourFormulas);
+    sheet.getRange(3, 19, payAmountFormulas.length, 1).setFormulas(payAmountFormulas);
   }
 
+  insertWeeklyGapRows_(sheet);
   sheet.setFrozenRows(2);
   formatWorkerSheet_(sheet);
-  sheet.autoResizeColumns(1, 20);
+  sheet.autoResizeColumns(1, 22);
 }
 
 function formatLogSheet_(sheet) {
@@ -289,68 +303,171 @@ function writeWorkerHeaders_(sheet) {
     "Accuracy Meters",
     "Map Link",
   ]]);
-  sheet.getRange(2, 11, 1, 10).setValues([[
+  sheet.getRange(2, 11, 1, 12).setValues([[
     "Date",
     "First Check In",
     "Last Check Out",
     "Auto Hours",
+    "Auto Payable Hours",
     "Manual Hours",
+    "Final Payable Hours",
     "Pay Rate",
     "Pay Amount",
     "Status",
     "Jobs",
     "Pay Notes",
   ]]);
-  sheet.getRange(1, 1, 2, 20).setFontWeight("bold");
+  sheet.getRange(1, 1, 2, 22).setFontWeight("bold");
 }
 
-function readManualSummaryValues_(sheet) {
-  const values = sheet.getDataRange().getValues();
-  const manualValues = {};
+function setupManualAdjustmentsSheet_(spreadsheet) {
+  let sheet = spreadsheet.getSheetByName(SETTINGS.MANUAL_SHEET);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(SETTINGS.MANUAL_SHEET);
+  }
+
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(["Key", "Worker Name", "Date", "Manual Hours", "Pay Rate", "Pay Notes", "Updated At"]);
+    sheet.setFrozenRows(1);
+  }
+}
+
+function saveAllManualAdjustments_(spreadsheet) {
+  getWorkerNames_(spreadsheet).forEach((workerName) => {
+    saveManualAdjustmentsForWorker_(spreadsheet, workerName);
+  });
+}
+
+function saveManualAdjustmentsForWorker_(spreadsheet, workerName) {
+  setupManualAdjustmentsSheet_(spreadsheet);
+  const sheet = spreadsheet.getSheetByName(getWorkerSheetName_(workerName));
+  if (!sheet || sheet.getLastRow() < 3) {
+    return;
+  }
+
+  const values = sheet.getDataRange().getDisplayValues();
+  const updates = {};
 
   for (let row = 2; row < values.length; row += 1) {
     const date = String(values[row][10] || "").trim();
-    if (!date) {
-      continue;
-    }
+    if (!date) continue;
 
-    manualValues[date] = {
-      manualHours: values[row][14],
-      payRate: values[row][15],
-      payNotes: values[row][19],
+    const manualHours = String(values[row][15] || "").trim();
+    const payRate = String(values[row][17] || "").trim();
+    const payNotes = String(values[row][21] || "").trim();
+
+    if (manualHours || payRate || payNotes) {
+      updates[getManualKey_(workerName, date)] = {
+        workerName,
+        date,
+        manualHours,
+        payRate,
+        payNotes,
+      };
+    }
+  }
+
+  upsertManualAdjustments_(spreadsheet, updates);
+}
+
+function readManualAdjustments_(spreadsheet, workerName) {
+  setupManualAdjustmentsSheet_(spreadsheet);
+  const sheet = spreadsheet.getSheetByName(SETTINGS.MANUAL_SHEET);
+  const values = sheet.getDataRange().getDisplayValues();
+  const targetName = normalizeName_(workerName);
+  const adjustments = {};
+
+  for (let row = 1; row < values.length; row += 1) {
+    const key = String(values[row][0] || "").trim();
+    const rowWorkerName = String(values[row][1] || "").trim();
+    if (!key || normalizeName_(rowWorkerName) !== targetName) continue;
+
+    adjustments[key] = {
+      manualHours: String(values[row][3] || "").trim(),
+      payRate: String(values[row][4] || "").trim(),
+      payNotes: String(values[row][5] || "").trim(),
     };
   }
 
-  return manualValues;
+  return adjustments;
 }
 
-function readManualTimeEntries_(sheet, generatedEntries) {
-  const values = sheet.getDataRange().getDisplayValues();
-  const generatedKeys = {};
+function upsertManualAdjustments_(spreadsheet, updates) {
+  const keys = Object.keys(updates);
+  if (!keys.length) return;
 
-  generatedEntries.forEach((entry) => {
-    generatedKeys[getEntryKey_(entry)] = true;
+  const sheet = spreadsheet.getSheetByName(SETTINGS.MANUAL_SHEET);
+  const values = sheet.getDataRange().getValues();
+  const rowByKey = {};
+
+  for (let row = 1; row < values.length; row += 1) {
+    const key = String(values[row][0] || "").trim();
+    if (key) rowByKey[key] = row + 1;
+  }
+
+  keys.forEach((key) => {
+    const update = updates[key];
+    const row = [
+      key,
+      update.workerName,
+      update.date,
+      update.manualHours,
+      update.payRate,
+      update.payNotes,
+      new Date(),
+    ];
+
+    if (rowByKey[key]) {
+      sheet.getRange(rowByKey[key], 1, 1, row.length).setValues([row]);
+    } else {
+      sheet.appendRow(row);
+    }
   });
+}
 
-  const manualEntries = [];
-  for (let row = 2; row < values.length; row += 1) {
-    const entry = values[row].slice(0, 9);
-    const hasEntry = entry.slice(0, 3).some((value) => String(value || "").trim());
+function getManualKey_(workerName, date) {
+  return `${normalizeName_(workerName)}|${String(date || "").trim()}`;
+}
 
-    if (!hasEntry) {
+function getWorkerNames_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName(SETTINGS.WORKERS_SHEET);
+  const values = sheet.getDataRange().getValues();
+  const names = [];
+
+  for (let row = 1; row < values.length; row += 1) {
+    const workerName = String(values[row][0] || "").trim();
+    if (workerName) names.push(workerName);
+  }
+
+  return names;
+}
+
+function insertWeeklyGapRows_(sheet) {
+  let row = 3;
+  while (row <= sheet.getLastRow()) {
+    const dateValue = String(sheet.getRange(row, 11).getDisplayValue() || "").trim();
+    if (!dateValue) {
+      row += 1;
       continue;
     }
 
-    if (!generatedKeys[getEntryKey_(entry)]) {
-      manualEntries.push(entry);
+    const date = parseDisplayDate_(dateValue);
+    const nextDateValue = String(sheet.getRange(row + 1, 11).getDisplayValue() || "").trim();
+    const nextDate = parseDisplayDate_(nextDateValue);
+
+    if (date && nextDate && date.getDay() === 0 && nextDate > date) {
+      sheet.insertRowsAfter(row, 1);
+      row += 2;
+    } else {
+      row += 1;
     }
   }
-
-  return manualEntries;
 }
 
-function getEntryKey_(entry) {
-  return entry.map((value) => String(value || "").trim()).join("|");
+function parseDisplayDate_(dateText) {
+  if (!dateText) return null;
+  const date = new Date(dateText);
+  return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function getWorkerSheetName_(workerName) {
