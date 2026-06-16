@@ -4,6 +4,8 @@ const SETTINGS = {
   MANUAL_SHEET: "Manual Adjustments",
   TIMEZONE: "America/Toronto",
 };
+const AUTO_CLOSED_BACKGROUND = "#f4cccc";
+const AUTO_CLOSED_NOTE = "Worker forgot to check out. System closed this work date at 11:59 PM.";
 
 function setup() {
   setupSheets_(SpreadsheetApp.getActiveSpreadsheet(), true);
@@ -233,11 +235,14 @@ function rebuildWorkerSheet_(spreadsheet, workerName, options) {
       let firstCheckIn = null;
       let lastCheckOut = null;
       let totalMs = 0;
+      let autoClosed = false;
 
       day.events.forEach((event) => {
         if (event.action === "Check In") {
-          openCheckIn = event.timestamp;
-          if (!firstCheckIn) firstCheckIn = event.timestamp;
+          if (!openCheckIn) {
+            openCheckIn = event.timestamp;
+            if (!firstCheckIn) firstCheckIn = event.timestamp;
+          }
         }
 
         if (event.action === "Check Out") {
@@ -249,10 +254,17 @@ function rebuildWorkerSheet_(spreadsheet, workerName, options) {
         }
       });
 
-      const manual = manualValues[getManualKey_(workerName, date)] || {};
+      if (openCheckIn && shouldAutoCloseWorkDate_(dateKey)) {
+        totalMs += getWorkDateEnd_(dateKey).getTime() - openCheckIn.getTime();
+        lastCheckOut = getWorkDateEnd_(dateKey);
+        openCheckIn = null;
+        autoClosed = true;
+      }
+
+      const manual = manualValues[getManualKey_(workerName, dateKey)] || {};
       const autoHours = totalMs ? Math.round((totalMs / 36e5) * 100) / 100 : "";
-      const autoPayableHours = autoHours;
-      const status = openCheckIn ? "Checked In" : "Complete";
+      const autoPayableHours = calculateAutoPayableHours_(autoHours);
+      const status = autoClosed ? "Auto Closed" : (openCheckIn ? "Checked In" : "Complete");
 
       return [
         date,
@@ -270,7 +282,7 @@ function rebuildWorkerSheet_(spreadsheet, workerName, options) {
       ];
     });
 
-  sheet.clearContents();
+  clearRebuiltSheet_(sheet);
   writeWorkerHeaders_(sheet);
 
   if (entries.length) {
@@ -292,9 +304,22 @@ function rebuildWorkerSheet_(spreadsheet, workerName, options) {
   }
 
   insertWeeklyGapRows_(sheet);
+  applyManualArtifacts_(sheet, workerName, manualValues);
+  applyAutoClosedFormatting_(sheet);
   sheet.setFrozenRows(2);
   formatWorkerSheet_(sheet);
   sheet.autoResizeColumns(1, 22);
+}
+
+function clearRebuiltSheet_(sheet) {
+  const lastRow = Math.max(sheet.getLastRow(), 3);
+  sheet.getRange(1, 1, lastRow, 22).clearContent();
+
+  if (lastRow > 2) {
+    const bodyRange = sheet.getRange(3, 1, lastRow - 2, 22);
+    bodyRange.clearFormat();
+    bodyRange.clearNote();
+  }
 }
 
 function formatLogSheet_(sheet) {
@@ -348,9 +373,29 @@ function setupManualAdjustmentsSheet_(spreadsheet) {
   }
 
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(["Key", "Worker Name", "Date", "Manual Hours", "Pay Rate", "Pay Notes", "Updated At"]);
+    sheet.appendRow(getManualAdjustmentHeaders_());
     sheet.setFrozenRows(1);
   }
+  sheet.getRange(1, 1, 1, getManualAdjustmentHeaders_().length).setValues([getManualAdjustmentHeaders_()]);
+}
+
+function getManualAdjustmentHeaders_() {
+  return [
+    "Key",
+    "Worker Name",
+    "Date",
+    "Work Date",
+    "Manual Hours",
+    "Pay Rate",
+    "Pay Notes",
+    "Manual Hours Note",
+    "Pay Rate Note",
+    "Pay Notes Note",
+    "Manual Hours Background",
+    "Pay Rate Background",
+    "Pay Notes Background",
+    "Updated At",
+  ];
 }
 
 function clearManualAdjustments_(spreadsheet) {
@@ -374,29 +419,63 @@ function saveManualAdjustmentsForWorker_(spreadsheet, workerName) {
     return;
   }
 
-  const values = sheet.getDataRange().getDisplayValues();
+  const range = sheet.getDataRange();
+  const values = range.getDisplayValues();
+  const notes = range.getNotes();
+  const backgrounds = range.getBackgrounds();
   const updates = {};
 
   for (let row = 2; row < values.length; row += 1) {
     const date = String(values[row][10] || "").trim();
     if (!date) continue;
 
-    const manualHours = String(values[row][15] || "").trim();
-    const payRate = String(values[row][17] || "").trim();
-    const payNotes = String(values[row][21] || "").trim();
+    const workDate = getIsoDateFromDisplayDate_(date);
+    if (!workDate) continue;
 
-    if (manualHours || payRate || payNotes) {
-      updates[getManualKey_(workerName, date)] = {
-        workerName,
-        date,
-        manualHours,
-        payRate,
-        payNotes,
-      };
+    const update = {
+      workerName,
+      date,
+      workDate,
+      manualHours: String(values[row][15] || "").trim(),
+      payRate: String(values[row][17] || "").trim(),
+      payNotes: String(values[row][21] || "").trim(),
+      manualHoursNote: String(notes[row][15] || "").trim(),
+      payRateNote: String(notes[row][17] || "").trim(),
+      payNotesNote: String(notes[row][21] || "").trim(),
+      manualHoursBackground: getManualBackground_(backgrounds[row][15], values[row][19]),
+      payRateBackground: getManualBackground_(backgrounds[row][17], values[row][19]),
+      payNotesBackground: getManualBackground_(backgrounds[row][21], values[row][19]),
+    };
+
+    if (hasManualAdjustment_(update)) {
+      updates[getManualKey_(workerName, workDate)] = update;
     }
   }
 
   upsertManualAdjustments_(spreadsheet, updates);
+}
+
+function hasManualAdjustment_(update) {
+  return [
+    update.manualHours,
+    update.payRate,
+    update.payNotes,
+    update.manualHoursNote,
+    update.payRateNote,
+    update.payNotesNote,
+    update.manualHoursBackground,
+    update.payRateBackground,
+    update.payNotesBackground,
+  ].some((value) => String(value || "").trim());
+}
+
+function getManualBackground_(background, status) {
+  const color = String(background || "").trim().toLowerCase();
+  const isAutoClosedRow = String(status || "").trim() === "Auto Closed";
+  if (!color || color === "#ffffff" || (isAutoClosedRow && color === AUTO_CLOSED_BACKGROUND)) {
+    return "";
+  }
+  return background;
 }
 
 function readManualAdjustments_(spreadsheet, workerName) {
@@ -412,9 +491,17 @@ function readManualAdjustments_(spreadsheet, workerName) {
     if (!key || normalizeName_(rowWorkerName) !== targetName) continue;
 
     adjustments[key] = {
-      manualHours: String(values[row][3] || "").trim(),
-      payRate: String(values[row][4] || "").trim(),
-      payNotes: String(values[row][5] || "").trim(),
+      displayDate: String(values[row][2] || "").trim(),
+      workDate: String(values[row][3] || "").trim(),
+      manualHours: String(values[row][4] || "").trim(),
+      payRate: String(values[row][5] || "").trim(),
+      payNotes: String(values[row][6] || "").trim(),
+      manualHoursNote: String(values[row][7] || "").trim(),
+      payRateNote: String(values[row][8] || "").trim(),
+      payNotesNote: String(values[row][9] || "").trim(),
+      manualHoursBackground: String(values[row][10] || "").trim(),
+      payRateBackground: String(values[row][11] || "").trim(),
+      payNotesBackground: String(values[row][12] || "").trim(),
     };
   }
 
@@ -440,9 +527,16 @@ function upsertManualAdjustments_(spreadsheet, updates) {
       key,
       update.workerName,
       update.date,
+      update.workDate,
       update.manualHours,
       update.payRate,
       update.payNotes,
+      update.manualHoursNote,
+      update.payRateNote,
+      update.payNotesNote,
+      update.manualHoursBackground,
+      update.payRateBackground,
+      update.payNotesBackground,
       new Date(),
     ];
 
@@ -456,6 +550,65 @@ function upsertManualAdjustments_(spreadsheet, updates) {
 
 function getManualKey_(workerName, date) {
   return `${normalizeName_(workerName)}|${String(date || "").trim()}`;
+}
+
+function applyManualArtifacts_(sheet, workerName, manualValues) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 3) return;
+
+  const dateValues = sheet.getRange(3, 11, lastRow - 2, 1).getDisplayValues();
+  dateValues.forEach((row, index) => {
+    const workDate = getIsoDateFromDisplayDate_(row[0]);
+    if (!workDate) return;
+
+    const manual = manualValues[getManualKey_(workerName, workDate)];
+    if (!manual) return;
+
+    const rowNumber = index + 3;
+    applyManualFieldArtifact_(sheet, rowNumber, 16, manual.manualHoursNote, manual.manualHoursBackground);
+    applyManualFieldArtifact_(sheet, rowNumber, 18, manual.payRateNote, manual.payRateBackground);
+    applyManualFieldArtifact_(sheet, rowNumber, 22, manual.payNotesNote, manual.payNotesBackground);
+  });
+}
+
+function applyManualFieldArtifact_(sheet, rowNumber, column, note, background) {
+  const range = sheet.getRange(rowNumber, column);
+  if (note) range.setNote(note);
+  if (background) range.setBackground(background);
+}
+
+function applyAutoClosedFormatting_(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 3) return;
+
+  const statusValues = sheet.getRange(3, 20, lastRow - 2, 1).getDisplayValues();
+  statusValues.forEach((row, index) => {
+    if (String(row[0] || "").trim() !== "Auto Closed") return;
+
+    const rowNumber = index + 3;
+    sheet.getRange(rowNumber, 11, 1, 12).setBackground(AUTO_CLOSED_BACKGROUND);
+    sheet.getRange(rowNumber, 20).setNote(AUTO_CLOSED_NOTE);
+  });
+}
+
+function calculateAutoPayableHours_(autoHours) {
+  if (!autoHours) return "";
+  if (autoHours <= 5) return autoHours;
+  return Math.max(Math.round((autoHours - 0.5) * 100) / 100, 0);
+}
+
+function getWorkDateEnd_(dateKey) {
+  const parts = String(dateKey || "").split("-").map(Number);
+  return new Date(parts[0], parts[1] - 1, parts[2], 23, 59, 0);
+}
+
+function shouldAutoCloseWorkDate_(dateKey) {
+  return String(dateKey || "") < getIsoDateFromTimestamp_(new Date());
+}
+
+function getIsoDateFromDisplayDate_(dateText) {
+  const date = parseDisplayDate_(dateText);
+  return date ? Utilities.formatDate(date, SETTINGS.TIMEZONE, "yyyy-MM-dd") : "";
 }
 
 function getWorkerNames_(spreadsheet) {
@@ -598,9 +751,19 @@ function getWorkerStatus_(spreadsheet, workerName) {
   for (let row = values.length - 1; row >= 1; row -= 1) {
     const name = String(values[row][4] || "").trim();
     if (normalizeName_(name) === targetName) {
+      const lastAction = String(values[row][3] || "").trim();
+      const lastTimestamp = values[row][0];
+      if (lastAction === "Check In" && isPastWorkDate_(lastTimestamp)) {
+        return {
+          lastAction: "Check Out",
+          lastTimestamp,
+          autoClosed: true,
+        };
+      }
+
       return {
-        lastAction: String(values[row][3] || "").trim(),
-        lastTimestamp: values[row][0],
+        lastAction,
+        lastTimestamp,
       };
     }
   }
@@ -609,6 +772,15 @@ function getWorkerStatus_(spreadsheet, workerName) {
     lastAction: "",
     lastTimestamp: null,
   };
+}
+
+function isPastWorkDate_(timestamp) {
+  if (!(timestamp instanceof Date)) return false;
+  return getIsoDateFromTimestamp_(timestamp) < getIsoDateFromTimestamp_(new Date());
+}
+
+function getIsoDateFromTimestamp_(timestamp) {
+  return Utilities.formatDate(timestamp, SETTINGS.TIMEZONE, "yyyy-MM-dd");
 }
 
 function normalizeName_(name) {
