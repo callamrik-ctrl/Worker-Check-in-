@@ -56,7 +56,7 @@ function handleRequest_(params) {
     }
 
     const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-    setupSheets_(spreadsheet, false);
+    setupSheets_(spreadsheet, false, { formatLog: action !== "CHECK_STATUS" });
 
     const worker = findWorker_(spreadsheet, name, pin);
     if (worker && worker.blocked) {
@@ -126,7 +126,8 @@ function handleRequest_(params) {
   }
 }
 
-function setupSheets_(spreadsheet, populateWorkerSheets) {
+function setupSheets_(spreadsheet, populateWorkerSheets, options) {
+  const shouldFormatLog = !options || options.formatLog !== false;
   let workersSheet = spreadsheet.getSheetByName(SETTINGS.WORKERS_SHEET);
   if (!workersSheet) {
     workersSheet = spreadsheet.insertSheet(SETTINGS.WORKERS_SHEET);
@@ -161,7 +162,9 @@ function setupSheets_(spreadsheet, populateWorkerSheets) {
     ]);
     logSheet.setFrozenRows(1);
   }
-  formatLogSheet_(logSheet);
+  if (shouldFormatLog) {
+    formatLogSheet_(logSheet);
+  }
   setupManualAdjustmentsSheet_(spreadsheet);
 
   if (populateWorkerSheets) {
@@ -332,6 +335,7 @@ function formatLogSheet_(sheet) {
   sheet.getRange("B:C").setNumberFormat("@");
   sheet.getRange(2, 1, lastRow - 1, 1).setNumberFormat("M/d/yyyy HH:mm:ss");
   insertLogWeeklyGapRows_(sheet);
+  clearAutoClosedLogFormatting_(sheet);
   applyLogAutoClosedFormatting_(sheet);
 }
 
@@ -366,13 +370,14 @@ function applyLogAutoClosedFormatting_(sheet) {
   values.forEach((row, index) => {
     const rowNumber = index + 2;
     const timestamp = row[0];
+    const workDate = getIsoDateFromDisplayDate_(row[1]);
     const action = String(row[3] || "").trim();
     const workerName = String(row[4] || "").trim();
-    if (!workerName || !(timestamp instanceof Date)) return;
+    if (!workerName || !workDate) return;
 
-    const key = `${normalizeName_(workerName)}|${getIsoDateFromTimestamp_(timestamp)}`;
+    const key = `${normalizeName_(workerName)}|${workDate}`;
     if (action === "Check In" && !openRows[key]) {
-      openRows[key] = { rowNumber, timestamp, backgrounds: backgrounds[index] };
+      openRows[key] = { rowNumber, workDate, backgrounds: backgrounds[index] };
     }
 
     if (action === "Check Out" && openRows[key]) {
@@ -382,12 +387,33 @@ function applyLogAutoClosedFormatting_(sheet) {
 
   Object.keys(openRows).forEach((key) => {
     const open = openRows[key];
-    if (!isPastWorkDate_(open.timestamp) || !isPlainLogRowBackground_(open.backgrounds)) return;
+    if (!shouldAutoCloseWorkDate_(open.workDate) || !isPlainLogRowBackground_(open.backgrounds)) return;
 
     sheet.getRange(open.rowNumber, 1, 1, 14).setBackground(AUTO_CLOSED_BACKGROUND);
     const actionCell = sheet.getRange(open.rowNumber, 4);
     if (!actionCell.getNote()) {
       actionCell.setNote(AUTO_CLOSED_NOTE);
+    }
+  });
+}
+
+function clearAutoClosedLogFormatting_(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const range = sheet.getRange(2, 1, lastRow - 1, 14);
+  const backgrounds = range.getBackgrounds();
+  const notes = range.getNotes();
+
+  backgrounds.forEach((row, rowIndex) => {
+    row.forEach((background, columnIndex) => {
+      if (String(background || "").trim().toLowerCase() === AUTO_CLOSED_BACKGROUND) {
+        sheet.getRange(rowIndex + 2, columnIndex + 1).setBackground(null);
+      }
+    });
+
+    if (notes[rowIndex][3] === AUTO_CLOSED_NOTE) {
+      sheet.getRange(rowIndex + 2, 4).setNote("");
     }
   });
 }
