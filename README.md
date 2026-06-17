@@ -43,6 +43,20 @@ window.FATEH_TIME_CONFIG = {
 };
 ```
 
+## Backend Test
+
+To confirm the deployed Apps Script is the current version, open this JSONP test URL:
+
+```text
+https://script.google.com/macros/s/AKfycbyzQvufVp_j5I26De7iGxwf5YNNMpLOcKin_Rn4mCUbWGFhxfEBnm8rNDLzxvYsk2mE/exec?action=CHECK_STATUS&pin=6963&callback=test
+```
+
+If PIN `6963` is blocked in the `Workers` sheet, the response should include:
+
+```text
+"Your access is blocked. Please contact the company."
+```
+
 ## Publish on GitHub Pages
 
 1. Push these files to a public GitHub repository.

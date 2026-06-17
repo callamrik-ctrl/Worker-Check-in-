@@ -23,10 +23,10 @@ function refreshAllWorkerSheets() {
 
 function installStableWorkerHoursFix() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  setupSheets_(spreadsheet, false);
   const activeWorkerNames = getActiveWorkerNames_(spreadsheet)
     .filter((workerName) => !isRepairProtectedSheet_(getWorkerSheetName_(workerName)));
 
-  setupManualAdjustmentsSheet_(spreadsheet);
   clearManualAdjustments_(spreadsheet);
 
   activeWorkerNames.forEach((workerName) => {
@@ -327,9 +327,76 @@ function clearRebuiltSheet_(sheet) {
 }
 
 function formatLogSheet_(sheet) {
+  removeBlankLogRows_(sheet);
   const lastRow = Math.max(sheet.getLastRow(), 2);
   sheet.getRange("B:C").setNumberFormat("@");
   sheet.getRange(2, 1, lastRow - 1, 1).setNumberFormat("M/d/yyyy HH:mm:ss");
+  insertLogWeeklyGapRows_(sheet);
+  applyLogAutoClosedFormatting_(sheet);
+}
+
+function removeBlankLogRows_(sheet) {
+  for (let row = sheet.getLastRow(); row >= 2; row -= 1) {
+    const values = sheet.getRange(row, 1, 1, 14).getDisplayValues()[0];
+    if (values.every((value) => !String(value || "").trim())) {
+      sheet.deleteRow(row);
+    }
+  }
+}
+
+function insertLogWeeklyGapRows_(sheet) {
+  for (let row = sheet.getLastRow() - 1; row >= 2; row -= 1) {
+    const date = parseDisplayDate_(sheet.getRange(row, 2).getDisplayValue());
+    const nextDate = parseDisplayDate_(sheet.getRange(row + 1, 2).getDisplayValue());
+    if (date && nextDate && getMondayWeekStart_(nextDate) > getMondayWeekStart_(date)) {
+      sheet.insertRowsAfter(row, 1);
+    }
+  }
+}
+
+function applyLogAutoClosedFormatting_(sheet) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  const range = sheet.getRange(2, 1, lastRow - 1, 14);
+  const values = range.getValues();
+  const backgrounds = range.getBackgrounds();
+  const openRows = {};
+
+  values.forEach((row, index) => {
+    const rowNumber = index + 2;
+    const timestamp = row[0];
+    const action = String(row[3] || "").trim();
+    const workerName = String(row[4] || "").trim();
+    if (!workerName || !(timestamp instanceof Date)) return;
+
+    const key = `${normalizeName_(workerName)}|${getIsoDateFromTimestamp_(timestamp)}`;
+    if (action === "Check In" && !openRows[key]) {
+      openRows[key] = { rowNumber, timestamp, backgrounds: backgrounds[index] };
+    }
+
+    if (action === "Check Out" && openRows[key]) {
+      delete openRows[key];
+    }
+  });
+
+  Object.keys(openRows).forEach((key) => {
+    const open = openRows[key];
+    if (!isPastWorkDate_(open.timestamp) || !isPlainLogRowBackground_(open.backgrounds)) return;
+
+    sheet.getRange(open.rowNumber, 1, 1, 14).setBackground(AUTO_CLOSED_BACKGROUND);
+    const actionCell = sheet.getRange(open.rowNumber, 4);
+    if (!actionCell.getNote()) {
+      actionCell.setNote(AUTO_CLOSED_NOTE);
+    }
+  });
+}
+
+function isPlainLogRowBackground_(backgrounds) {
+  return backgrounds.every((background) => {
+    const color = String(background || "").trim().toLowerCase();
+    return !color || color === "#ffffff" || color === AUTO_CLOSED_BACKGROUND;
+  });
 }
 
 function formatWorkerSheet_(sheet) {
