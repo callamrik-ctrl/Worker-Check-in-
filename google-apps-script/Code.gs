@@ -23,11 +23,9 @@ function refreshAllWorkerSheets() {
 
 function installStableWorkerHoursFix() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
-  const workerNames = getWorkerNames_(spreadsheet);
   const activeWorkerNames = getActiveWorkerNames_(spreadsheet)
     .filter((workerName) => !isRepairProtectedSheet_(getWorkerSheetName_(workerName)));
 
-  backupWorkerSheets_(spreadsheet, workerNames);
   setupManualAdjustmentsSheet_(spreadsheet);
   clearManualAdjustments_(spreadsheet);
 
@@ -61,6 +59,10 @@ function handleRequest_(params) {
     setupSheets_(spreadsheet, false);
 
     const worker = findWorker_(spreadsheet, name, pin);
+    if (worker && worker.blocked) {
+      return fail_("Your access is blocked. Please contact the company.");
+    }
+
     if (!worker) {
       return fail_("Name or PIN is incorrect.");
     }
@@ -285,17 +287,20 @@ function rebuildWorkerSheet_(spreadsheet, workerName, options) {
   clearRebuiltSheet_(sheet);
   writeWorkerHeaders_(sheet);
 
-  if (entries.length) {
-    sheet.getRange(3, 1, entries.length, entries[0].length).setValues(entries);
+  const entryRows = addWeeklyGapRows_(entries, 0, 9);
+  const summaryRowsWithGaps = addWeeklyGapRows_(summaryRows, 0, 12);
+
+  if (entryRows.length) {
+    sheet.getRange(3, 1, entryRows.length, entryRows[0].length).setValues(entryRows);
   }
 
-  if (summaryRows.length) {
-    sheet.getRange(3, 11, summaryRows.length, summaryRows[0].length).setValues(summaryRows);
-    const finalHourFormulas = summaryRows.map((row, index) => {
+  if (summaryRowsWithGaps.length) {
+    sheet.getRange(3, 11, summaryRowsWithGaps.length, summaryRowsWithGaps[0].length).setValues(summaryRowsWithGaps);
+    const finalHourFormulas = summaryRowsWithGaps.map((row, index) => {
       const rowNumber = index + 3;
       return [`=IF(OR(O${rowNumber}<>"",P${rowNumber}<>""),N(O${rowNumber})+N(P${rowNumber}),"")`];
     });
-    const payAmountFormulas = summaryRows.map((row, index) => {
+    const payAmountFormulas = summaryRowsWithGaps.map((row, index) => {
       const rowNumber = index + 3;
       return [`=IF(R${rowNumber}<>"",Q${rowNumber}*R${rowNumber},"")`];
     });
@@ -303,7 +308,6 @@ function rebuildWorkerSheet_(spreadsheet, workerName, options) {
     sheet.getRange(3, 19, payAmountFormulas.length, 1).setFormulas(payAmountFormulas);
   }
 
-  insertWeeklyGapRows_(sheet);
   applyManualArtifacts_(sheet, workerName, manualValues);
   applyAutoClosedFormatting_(sheet);
   sheet.setFrozenRows(2);
@@ -673,26 +677,21 @@ function isRepairProtectedSheet_(sheetName) {
   ].indexOf(sheetName) !== -1 || /backup/i.test(sheetName);
 }
 
-function insertWeeklyGapRows_(sheet) {
-  let row = 3;
-  while (row <= sheet.getLastRow()) {
-    const dateValue = String(sheet.getRange(row, 11).getDisplayValue() || "").trim();
-    if (!dateValue) {
-      row += 1;
-      continue;
-    }
+function addWeeklyGapRows_(rows, dateIndex, width) {
+  const rowsWithGaps = [];
 
-    const date = parseDisplayDate_(dateValue);
-    const nextDateValue = String(sheet.getRange(row + 1, 11).getDisplayValue() || "").trim();
-    const nextDate = parseDisplayDate_(nextDateValue);
+  rows.forEach((row, index) => {
+    rowsWithGaps.push(row);
 
+    const date = parseDisplayDate_(row[dateIndex]);
+    const nextRow = rows[index + 1];
+    const nextDate = nextRow ? parseDisplayDate_(nextRow[dateIndex]) : null;
     if (date && nextDate && getMondayWeekStart_(nextDate) > getMondayWeekStart_(date)) {
-      sheet.insertRowsAfter(row, 1);
-      row += 2;
-    } else {
-      row += 1;
+      rowsWithGaps.push(new Array(width).fill(""));
     }
-  }
+  });
+
+  return rowsWithGaps;
 }
 
 function parseDisplayDate_(dateText) {
@@ -735,7 +734,10 @@ function findWorker_(spreadsheet, name, pin) {
     const active = String(values[row][2] || "TRUE").trim().toUpperCase();
 
     const nameMatches = !wantedName || normalizeName_(workerName) === wantedName;
-    if (nameMatches && workerPin === wantedPin && active !== "FALSE") {
+    if (nameMatches && workerPin === wantedPin) {
+      if (active === "FALSE") {
+        return { name: workerName, blocked: true };
+      }
       return { name: workerName };
     }
   }
