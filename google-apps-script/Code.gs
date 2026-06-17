@@ -1,7 +1,6 @@
 const SETTINGS = {
   WORKERS_SHEET: "Workers",
   LOG_SHEET: "Time Log",
-  MANUAL_SHEET: "Manual Adjustments",
   TIMEZONE: "America/Toronto",
 };
 const AUTO_CLOSED_BACKGROUND = "#f4cccc";
@@ -14,7 +13,6 @@ function setup() {
 function refreshAllWorkerSheets() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   setupSheets_(spreadsheet, false);
-  saveAllManualAdjustments_(spreadsheet);
 
   getWorkerNames_(spreadsheet).forEach((workerName) => {
     rebuildWorkerSheet_(spreadsheet, workerName);
@@ -24,13 +22,12 @@ function refreshAllWorkerSheets() {
 function installStableWorkerHoursFix() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   setupSheets_(spreadsheet, false);
+  deleteManualAdjustmentsSheet_(spreadsheet);
   const activeWorkerNames = getActiveWorkerNames_(spreadsheet)
     .filter((workerName) => !isRepairProtectedSheet_(getWorkerSheetName_(workerName)));
 
-  clearManualAdjustments_(spreadsheet);
-
   activeWorkerNames.forEach((workerName) => {
-    rebuildWorkerSheet_(spreadsheet, workerName, { preserveManualValues: false });
+    rebuildWorkerSheet_(spreadsheet, workerName);
   });
 }
 
@@ -165,25 +162,20 @@ function setupSheets_(spreadsheet, populateWorkerSheets, options) {
   if (shouldFormatLog) {
     formatLogSheet_(logSheet);
   }
-  setupManualAdjustmentsSheet_(spreadsheet);
 
   if (populateWorkerSheets) {
     refreshAllWorkerSheets();
   }
 }
 
-function rebuildWorkerSheet_(spreadsheet, workerName, options) {
-  const shouldPreserveManualValues = !options || options.preserveManualValues !== false;
+function rebuildWorkerSheet_(spreadsheet, workerName) {
   const sheetName = getWorkerSheetName_(workerName);
   let sheet = spreadsheet.getSheetByName(sheetName);
   if (!sheet) {
     sheet = spreadsheet.insertSheet(sheetName);
   }
 
-  if (shouldPreserveManualValues) {
-    saveManualAdjustmentsForWorker_(spreadsheet, workerName);
-  }
-  const manualValues = shouldPreserveManualValues ? readManualAdjustments_(spreadsheet, workerName) : {};
+  const annotations = captureWorkerAnnotations_(sheet, workerName);
   const logRange = spreadsheet.getSheetByName(SETTINGS.LOG_SHEET).getDataRange();
   const logValues = logRange.getValues();
   const logDisplayValues = logRange.getDisplayValues();
@@ -192,7 +184,6 @@ function rebuildWorkerSheet_(spreadsheet, workerName, options) {
   const targetName = normalizeName_(workerName);
 
   for (let row = 1; row < logValues.length; row += 1) {
-    const timestamp = logValues[row][0];
     const date = String(logDisplayValues[row][1] || "").trim();
     const time = String(logDisplayValues[row][2] || "").trim();
     const action = String(logValues[row][3] || "").trim();
@@ -210,11 +201,12 @@ function rebuildWorkerSheet_(spreadsheet, workerName, options) {
 
     entries.push([date, time, action, job, notes, lat, lng, accuracy, mapLink]);
 
-    if (!date || !(timestamp instanceof Date)) {
+    const eventTime = parseLogDateTime_(date, time);
+    if (!eventTime) {
       continue;
     }
 
-    const dateKey = Utilities.formatDate(timestamp, SETTINGS.TIMEZONE, "yyyy-MM-dd");
+    const dateKey = Utilities.formatDate(eventTime, SETTINGS.TIMEZONE, "yyyy-MM-dd");
     if (!days[dateKey]) {
       days[dateKey] = {
         displayDate: date,
@@ -224,7 +216,7 @@ function rebuildWorkerSheet_(spreadsheet, workerName, options) {
       };
     }
 
-    days[dateKey].events.push({ timestamp, action });
+    days[dateKey].events.push({ timestamp: eventTime, action });
     if (job) days[dateKey].jobs.push(job);
     if (notes) days[dateKey].notes.push(notes);
   }
@@ -266,24 +258,24 @@ function rebuildWorkerSheet_(spreadsheet, workerName, options) {
         autoClosed = true;
       }
 
-      const manual = manualValues[getManualKey_(workerName, dateKey)] || {};
-      const autoHours = totalMs ? Math.round((totalMs / 36e5) * 100) / 100 : "";
-      const autoPayableHours = calculateAutoPayableHours_(autoHours);
+      const annotation = annotations.summaryValues[getSummaryAnnotationKey_(workerName, dateKey)] || {};
+      const workHours = totalMs ? Math.round((totalMs / 36e5) * 100) / 100 : "";
+      const breakHours = calculateBreakHours_(workHours);
+      const payableHours = workHours ? Math.max(Math.round((workHours - breakHours) * 100) / 100, 0) : "";
       const status = autoClosed ? "Auto Closed" : (openCheckIn ? "Checked In" : "Complete");
 
       return [
         date,
         firstCheckIn ? Utilities.formatDate(firstCheckIn, SETTINGS.TIMEZONE, "h:mm a") : "",
         lastCheckOut ? Utilities.formatDate(lastCheckOut, SETTINGS.TIMEZONE, "h:mm a") : "",
-        autoHours,
-        autoPayableHours,
-        manual.manualHours || "",
-        "",
-        manual.payRate || "",
+        workHours,
+        breakHours || "",
+        payableHours,
+        annotation.payRate || "",
         "",
         status,
         uniqueText_(day.jobs),
-        manual.payNotes || "",
+        annotation.notes || "",
       ];
     });
 
@@ -291,7 +283,7 @@ function rebuildWorkerSheet_(spreadsheet, workerName, options) {
   writeWorkerHeaders_(sheet);
 
   const entryRows = addWeeklyGapRows_(entries, 0, 9);
-  const summaryRowsWithGaps = addWeeklyGapRows_(summaryRows, 0, 12);
+  const summaryRowsWithGaps = addWeeklyGapRows_(summaryRows, 0, 11);
 
   if (entryRows.length) {
     sheet.getRange(3, 1, entryRows.length, entryRows[0].length).setValues(entryRows);
@@ -299,19 +291,14 @@ function rebuildWorkerSheet_(spreadsheet, workerName, options) {
 
   if (summaryRowsWithGaps.length) {
     sheet.getRange(3, 11, summaryRowsWithGaps.length, summaryRowsWithGaps[0].length).setValues(summaryRowsWithGaps);
-    const finalHourFormulas = summaryRowsWithGaps.map((row, index) => {
-      const rowNumber = index + 3;
-      return [`=IF(OR(O${rowNumber}<>"",P${rowNumber}<>""),N(O${rowNumber})+N(P${rowNumber}),"")`];
-    });
     const payAmountFormulas = summaryRowsWithGaps.map((row, index) => {
       const rowNumber = index + 3;
-      return [`=IF(R${rowNumber}<>"",Q${rowNumber}*R${rowNumber},"")`];
+      return [`=IF(Q${rowNumber}<>"",P${rowNumber}*Q${rowNumber},"")`];
     });
-    sheet.getRange(3, 17, finalHourFormulas.length, 1).setFormulas(finalHourFormulas);
-    sheet.getRange(3, 19, payAmountFormulas.length, 1).setFormulas(payAmountFormulas);
+    sheet.getRange(3, 18, payAmountFormulas.length, 1).setFormulas(payAmountFormulas);
   }
 
-  applyManualArtifacts_(sheet, workerName, manualValues);
+  applyWorkerAnnotations_(sheet, workerName, annotations);
   applyAutoClosedFormatting_(sheet);
   sheet.setFrozenRows(2);
   formatWorkerSheet_(sheet);
@@ -446,252 +433,143 @@ function writeWorkerHeaders_(sheet) {
     "Accuracy Meters",
     "Map Link",
   ]]);
-  sheet.getRange(2, 11, 1, 12).setValues([[
+  sheet.getRange(2, 11, 1, 11).setValues([[
     "Date",
     "First Check In",
     "Last Check Out",
-    "Auto Hours",
-    "Auto Payable Hours",
-    "Manual Hours",
-    "Final Payable Hours",
+    "Work Hours",
+    "Break",
+    "Payable Hours",
     "Pay Rate",
     "Pay Amount",
     "Status",
     "Jobs",
-    "Pay Notes",
+    "Notes",
   ]]);
-  sheet.getRange(1, 1, 2, 22).setFontWeight("bold");
+  sheet.getRange(1, 1, 2, 21).setFontWeight("bold");
 }
 
-function setupManualAdjustmentsSheet_(spreadsheet) {
-  let sheet = spreadsheet.getSheetByName(SETTINGS.MANUAL_SHEET);
-  if (!sheet) {
-    sheet = spreadsheet.insertSheet(SETTINGS.MANUAL_SHEET);
-  }
-
-  if (sheet.getLastRow() === 0) {
-    sheet.appendRow(getManualAdjustmentHeaders_());
-    sheet.setFrozenRows(1);
-  }
-  sheet.getRange(1, 1, 1, getManualAdjustmentHeaders_().length).setValues([getManualAdjustmentHeaders_()]);
-}
-
-function getManualAdjustmentHeaders_() {
-  return [
-    "Key",
-    "Worker Name",
-    "Date",
-    "Work Date",
-    "Manual Hours",
-    "Pay Rate",
-    "Pay Notes",
-    "Manual Hours Note",
-    "Pay Rate Note",
-    "Pay Notes Note",
-    "Manual Hours Background",
-    "Pay Rate Background",
-    "Pay Notes Background",
-    "Updated At",
-  ];
-}
-
-function clearManualAdjustments_(spreadsheet) {
-  const sheet = spreadsheet.getSheetByName(SETTINGS.MANUAL_SHEET);
+function captureWorkerAnnotations_(sheet, workerName) {
+  const annotations = { cells: {}, summaryValues: {} };
   const lastRow = sheet.getLastRow();
-  if (lastRow > 1) {
-    sheet.deleteRows(2, lastRow - 1);
-  }
-}
+  if (lastRow < 3) return annotations;
 
-function saveAllManualAdjustments_(spreadsheet) {
-  getWorkerNames_(spreadsheet).forEach((workerName) => {
-    saveManualAdjustmentsForWorker_(spreadsheet, workerName);
-  });
-}
-
-function saveManualAdjustmentsForWorker_(spreadsheet, workerName) {
-  setupManualAdjustmentsSheet_(spreadsheet);
-  const sheet = spreadsheet.getSheetByName(getWorkerSheetName_(workerName));
-  if (!sheet || sheet.getLastRow() < 3) {
-    return;
-  }
-
-  const range = sheet.getDataRange();
+  const range = sheet.getRange(3, 1, lastRow - 2, 22);
   const values = range.getDisplayValues();
   const notes = range.getNotes();
   const backgrounds = range.getBackgrounds();
-  const updates = {};
+  const headers = sheet.getRange(2, 1, 1, 22).getDisplayValues()[0];
+  const payRateIndex = headers.indexOf("Pay Rate");
+  const notesIndex = headers.indexOf("Notes", 10) !== -1 ? headers.indexOf("Notes", 10) : headers.indexOf("Pay Notes");
 
-  for (let row = 2; row < values.length; row += 1) {
-    const date = String(values[row][10] || "").trim();
-    if (!date) continue;
+  values.forEach((row, rowIndex) => {
+    const entryKey = getEntryAnnotationKey_(workerName, row);
+    if (entryKey) captureRowAnnotations_(annotations.cells, entryKey, row, notes[rowIndex], backgrounds[rowIndex], 1, 9);
 
-    const workDate = getIsoDateFromDisplayDate_(date);
-    if (!workDate) continue;
-
-    const update = {
-      workerName,
-      date,
-      workDate,
-      manualHours: String(values[row][15] || "").trim(),
-      payRate: String(values[row][17] || "").trim(),
-      payNotes: String(values[row][21] || "").trim(),
-      manualHoursNote: String(notes[row][15] || "").trim(),
-      payRateNote: String(notes[row][17] || "").trim(),
-      payNotesNote: String(notes[row][21] || "").trim(),
-      manualHoursBackground: getManualBackground_(backgrounds[row][15], values[row][19]),
-      payRateBackground: getManualBackground_(backgrounds[row][17], values[row][19]),
-      payNotesBackground: getManualBackground_(backgrounds[row][21], values[row][19]),
-    };
-
-    if (hasManualAdjustment_(update)) {
-      updates[getManualKey_(workerName, workDate)] = update;
-    }
-  }
-
-  upsertManualAdjustments_(spreadsheet, updates);
-}
-
-function hasManualAdjustment_(update) {
-  return [
-    update.manualHours,
-    update.payRate,
-    update.payNotes,
-    update.manualHoursNote,
-    update.payRateNote,
-    update.payNotesNote,
-    update.manualHoursBackground,
-    update.payRateBackground,
-    update.payNotesBackground,
-  ].some((value) => String(value || "").trim());
-}
-
-function getManualBackground_(background, status) {
-  const color = String(background || "").trim().toLowerCase();
-  const isAutoClosedRow = String(status || "").trim() === "Auto Closed";
-  if (!color || color === "#ffffff" || (isAutoClosedRow && color === AUTO_CLOSED_BACKGROUND)) {
-    return "";
-  }
-  return background;
-}
-
-function readManualAdjustments_(spreadsheet, workerName) {
-  setupManualAdjustmentsSheet_(spreadsheet);
-  const sheet = spreadsheet.getSheetByName(SETTINGS.MANUAL_SHEET);
-  const values = sheet.getDataRange().getDisplayValues();
-  const targetName = normalizeName_(workerName);
-  const adjustments = {};
-
-  for (let row = 1; row < values.length; row += 1) {
-    const key = String(values[row][0] || "").trim();
-    const rowWorkerName = String(values[row][1] || "").trim();
-    if (!key || normalizeName_(rowWorkerName) !== targetName) continue;
-
-    adjustments[key] = {
-      displayDate: String(values[row][2] || "").trim(),
-      workDate: String(values[row][3] || "").trim(),
-      manualHours: String(values[row][4] || "").trim(),
-      payRate: String(values[row][5] || "").trim(),
-      payNotes: String(values[row][6] || "").trim(),
-      manualHoursNote: String(values[row][7] || "").trim(),
-      payRateNote: String(values[row][8] || "").trim(),
-      payNotesNote: String(values[row][9] || "").trim(),
-      manualHoursBackground: String(values[row][10] || "").trim(),
-      payRateBackground: String(values[row][11] || "").trim(),
-      payNotesBackground: String(values[row][12] || "").trim(),
-    };
-  }
-
-  return adjustments;
-}
-
-function upsertManualAdjustments_(spreadsheet, updates) {
-  const keys = Object.keys(updates);
-  if (!keys.length) return;
-
-  const sheet = spreadsheet.getSheetByName(SETTINGS.MANUAL_SHEET);
-  const values = sheet.getDataRange().getValues();
-  const rowByKey = {};
-
-  for (let row = 1; row < values.length; row += 1) {
-    const key = String(values[row][0] || "").trim();
-    if (key) rowByKey[key] = row + 1;
-  }
-
-  keys.forEach((key) => {
-    const update = updates[key];
-    const row = [
-      key,
-      update.workerName,
-      update.date,
-      update.workDate,
-      update.manualHours,
-      update.payRate,
-      update.payNotes,
-      update.manualHoursNote,
-      update.payRateNote,
-      update.payNotesNote,
-      update.manualHoursBackground,
-      update.payRateBackground,
-      update.payNotesBackground,
-      new Date(),
-    ];
-
-    if (rowByKey[key]) {
-      sheet.getRange(rowByKey[key], 1, 1, row.length).setValues([row]);
-    } else {
-      sheet.appendRow(row);
+    const summaryKey = getSummaryAnnotationKey_(workerName, getIsoDateFromDisplayDate_(row[10]));
+    if (summaryKey) {
+      captureRowAnnotations_(annotations.cells, summaryKey, row, notes[rowIndex], backgrounds[rowIndex], 11, 21);
+      annotations.summaryValues[summaryKey] = {
+        payRate: payRateIndex === -1 ? "" : String(row[payRateIndex] || "").trim(),
+        notes: notesIndex === -1 ? "" : String(row[notesIndex] || "").trim(),
+      };
     }
   });
+
+  return annotations;
 }
 
-function getManualKey_(workerName, date) {
-  return `${normalizeName_(workerName)}|${String(date || "").trim()}`;
+function captureRowAnnotations_(annotations, key, values, notes, backgrounds, startColumn, endColumn) {
+  for (let column = startColumn; column <= endColumn; column += 1) {
+    const index = column - 1;
+    const note = String(notes[index] || "").trim();
+    const background = getPreservedBackground_(backgrounds[index]);
+    if (!note && !background) continue;
+    if (!annotations[key]) annotations[key] = {};
+    annotations[key][column] = { note, background };
+  }
 }
 
-function applyManualArtifacts_(sheet, workerName, manualValues) {
+function applyWorkerAnnotations_(sheet, workerName, annotations) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 3) return;
 
-  const dateValues = sheet.getRange(3, 11, lastRow - 2, 1).getDisplayValues();
-  dateValues.forEach((row, index) => {
-    const workDate = getIsoDateFromDisplayDate_(row[0]);
-    if (!workDate) return;
+  const values = sheet.getRange(3, 1, lastRow - 2, 21).getDisplayValues();
+  values.forEach((row, rowIndex) => {
+    const rowNumber = rowIndex + 3;
+    applyRowAnnotations_(sheet, rowNumber, annotations.cells[getEntryAnnotationKey_(workerName, row)]);
 
-    const manual = manualValues[getManualKey_(workerName, workDate)];
-    if (!manual) return;
-
-    const rowNumber = index + 3;
-    applyManualFieldArtifact_(sheet, rowNumber, 16, manual.manualHoursNote, manual.manualHoursBackground);
-    applyManualFieldArtifact_(sheet, rowNumber, 18, manual.payRateNote, manual.payRateBackground);
-    applyManualFieldArtifact_(sheet, rowNumber, 22, manual.payNotesNote, manual.payNotesBackground);
+    const summaryKey = getSummaryAnnotationKey_(workerName, getIsoDateFromDisplayDate_(row[10]));
+    applyRowAnnotations_(sheet, rowNumber, annotations.cells[summaryKey]);
   });
 }
 
-function applyManualFieldArtifact_(sheet, rowNumber, column, note, background) {
-  const range = sheet.getRange(rowNumber, column);
-  if (note) range.setNote(note);
-  if (background) range.setBackground(background);
+function applyRowAnnotations_(sheet, rowNumber, annotations) {
+  if (!annotations) return;
+
+  Object.keys(annotations).forEach((column) => {
+    const annotation = annotations[column];
+    const range = sheet.getRange(rowNumber, Number(column));
+    if (annotation.note) range.setNote(annotation.note);
+    if (annotation.background) range.setBackground(annotation.background);
+  });
+}
+
+function getEntryAnnotationKey_(workerName, row) {
+  const date = String(row[0] || "").trim();
+  const time = String(row[1] || "").trim();
+  const action = String(row[2] || "").trim();
+  if (!date || !time || !action) return "";
+  return `${normalizeName_(workerName)}|entry|${getIsoDateFromDisplayDate_(date)}|${time}|${action}`;
+}
+
+function getSummaryAnnotationKey_(workerName, workDate) {
+  return workDate ? `${normalizeName_(workerName)}|summary|${workDate}` : "";
+}
+
+function getPreservedBackground_(background) {
+  const color = String(background || "").trim().toLowerCase();
+  if (!color || color === "#ffffff" || color === AUTO_CLOSED_BACKGROUND) return "";
+  return background;
 }
 
 function applyAutoClosedFormatting_(sheet) {
   const lastRow = sheet.getLastRow();
   if (lastRow < 3) return;
 
-  const statusValues = sheet.getRange(3, 20, lastRow - 2, 1).getDisplayValues();
+  const statusValues = sheet.getRange(3, 19, lastRow - 2, 1).getDisplayValues();
   statusValues.forEach((row, index) => {
     if (String(row[0] || "").trim() !== "Auto Closed") return;
 
     const rowNumber = index + 3;
-    sheet.getRange(rowNumber, 11, 1, 12).setBackground(AUTO_CLOSED_BACKGROUND);
-    sheet.getRange(rowNumber, 20).setNote(AUTO_CLOSED_NOTE);
+    sheet.getRange(rowNumber, 11, 1, 11).setBackground(AUTO_CLOSED_BACKGROUND);
+    sheet.getRange(rowNumber, 19).setNote(AUTO_CLOSED_NOTE);
   });
 }
 
-function calculateAutoPayableHours_(autoHours) {
-  if (!autoHours) return "";
-  if (autoHours <= 5) return autoHours;
-  return Math.max(Math.round((autoHours - 0.5) * 100) / 100, 0);
+function calculateBreakHours_(workHours) {
+  return workHours > 5 ? 0.5 : 0;
+}
+
+function parseLogDateTime_(dateText, timeText) {
+  const date = parseDisplayDate_(dateText);
+  if (!date || !timeText) return null;
+
+  const parsed = new Date(`${dateText} ${timeText}`);
+  if (!Number.isNaN(parsed.getTime())) return parsed;
+
+  const match = String(timeText).trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (!match) return null;
+
+  let hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  const seconds = Number(match[3] || 0);
+  const meridiem = String(match[4] || "").toUpperCase();
+  if (meridiem === "PM" && hours < 12) hours += 12;
+  if (meridiem === "AM" && hours === 12) hours = 0;
+
+  date.setHours(hours, minutes, seconds, 0);
+  return date;
 }
 
 function getWorkDateEnd_(dateKey) {
@@ -706,6 +584,13 @@ function shouldAutoCloseWorkDate_(dateKey) {
 function getIsoDateFromDisplayDate_(dateText) {
   const date = parseDisplayDate_(dateText);
   return date ? Utilities.formatDate(date, SETTINGS.TIMEZONE, "yyyy-MM-dd") : "";
+}
+
+function deleteManualAdjustmentsSheet_(spreadsheet) {
+  const sheet = spreadsheet.getSheetByName("Manual Adjustments");
+  if (sheet) {
+    spreadsheet.deleteSheet(sheet);
+  }
 }
 
 function getWorkerNames_(spreadsheet) {
@@ -845,14 +730,16 @@ function isWorkerActive_(value) {
 function getWorkerStatus_(spreadsheet, workerName) {
   const sheet = spreadsheet.getSheetByName(SETTINGS.LOG_SHEET);
   const values = sheet.getDataRange().getValues();
+  const displayValues = sheet.getDataRange().getDisplayValues();
   const targetName = normalizeName_(workerName);
 
   for (let row = values.length - 1; row >= 1; row -= 1) {
     const name = String(values[row][4] || "").trim();
     if (normalizeName_(name) === targetName) {
       const lastAction = String(values[row][3] || "").trim();
-      const lastTimestamp = values[row][0];
-      if (lastAction === "Check In" && isPastWorkDate_(lastTimestamp)) {
+      const lastTimestamp = parseLogDateTime_(displayValues[row][1], displayValues[row][2]);
+      const lastWorkDate = getIsoDateFromDisplayDate_(displayValues[row][1]);
+      if (lastAction === "Check In" && lastWorkDate && shouldAutoCloseWorkDate_(lastWorkDate)) {
         return {
           lastAction: "Check Out",
           lastTimestamp,
@@ -871,11 +758,6 @@ function getWorkerStatus_(spreadsheet, workerName) {
     lastAction: "",
     lastTimestamp: null,
   };
-}
-
-function isPastWorkDate_(timestamp) {
-  if (!(timestamp instanceof Date)) return false;
-  return getIsoDateFromTimestamp_(timestamp) < getIsoDateFromTimestamp_(new Date());
 }
 
 function getIsoDateFromTimestamp_(timestamp) {
