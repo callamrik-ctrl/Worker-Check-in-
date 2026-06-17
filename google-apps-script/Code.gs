@@ -702,8 +702,7 @@ function getActiveWorkerNames_(spreadsheet) {
 
   for (let row = 1; row < values.length; row += 1) {
     const workerName = String(values[row][0] || "").trim();
-    const active = String(values[row][2] || "TRUE").trim().toUpperCase();
-    if (workerName && active !== "FALSE") names.push(workerName);
+    if (workerName && isWorkerActive_(values[row][2])) names.push(workerName);
   }
 
   return names;
@@ -798,11 +797,11 @@ function findWorker_(spreadsheet, name, pin) {
   for (let row = 1; row < values.length; row += 1) {
     const workerName = String(values[row][0] || "").trim();
     const workerPin = String(values[row][1] || "").trim();
-    const active = String(values[row][2] || "TRUE").trim().toUpperCase();
+    const active = isWorkerActive_(values[row][2]);
 
     const nameMatches = !wantedName || normalizeName_(workerName) === wantedName;
     if (nameMatches && workerPin === wantedPin) {
-      if (active === "FALSE") {
+      if (!active) {
         return { name: workerName, blocked: true };
       }
       return { name: workerName };
@@ -810,6 +809,11 @@ function findWorker_(spreadsheet, name, pin) {
   }
 
   return null;
+}
+
+function isWorkerActive_(value) {
+  if (value === "" || value === null || typeof value === "undefined") return true;
+  return String(value).trim().toUpperCase() !== "FALSE";
 }
 
 function getWorkerStatus_(spreadsheet, workerName) {
